@@ -4,8 +4,6 @@ This repository contains code for training, evaluating, and deploying a deep lea
 
 ---
 
-## 🧠 Files & Functionality
-
 ### 1. **`Compile_Data.py`**
 Preprocess raw `.edf` and `.tsv` files into a `.npz` dataset for training/testing.
 - **Input folder:** contains matched `subject_x.edf` and `subject_x.tsv` files, if other format for score file is used, section on score loader need to be changed. recommend a simple NP or Mat file containing only the score array.
