@@ -4,9 +4,9 @@ This repository contains code for training, evaluating, and deploying a deep lea
 
 ---
 
-### 1. **`Compile_Data.py`**
-Preprocess raw `.edf` and `.tsv` files into a `.npz` dataset for training/testing.
-- **Input folder:** contains matched `subject_x.edf` and `subject_x.tsv` files, if other format for score file is used, section on score loader need to be changed. recommend a simple NP or Mat file containing only the score array.
+### 1. **`Labeled_data_processing.ipynb`**
+Preprocess raw `.edf` and `.txt` files into a `.npz` dataset for training/testing.
+- **Input folder:** contains matched `subject_x.edf` and `subject_x.txt` files, if other format for score file is used, section on score loader need to be changed. recommend a simple NP or Mat file containing only the score array.
 - **Output:** `.npz` file with EEG, EMG, and score arrays
 - **Set paths:**
   - `folder_path` → input EDF & TSV files
