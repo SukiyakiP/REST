@@ -7,31 +7,32 @@ This repository contains code for training, evaluating, and deploying a deep lea
 ### 1. **`Labeled_data_processing.ipynb`**
 Preprocess raw `.edf` and `.txt` files into a `.npz` dataset for training/testing.
 - **Input folder:** contains matched `subject_x.edf` and `subject_x.txt` files, if other format for score file is used, section on score loader need to be changed. recommend a simple NP or Mat file containing only the score array.
-- **Output:** `.npz` file with EEG, EMG, and score arrays
+- **Output:** `.npz` file with STFT of EEG, EMG along with the score arrays
 - **Set paths:**
-  - `folder_path` → input EDF & TSV files
+  - `folder_path` → input EDF & txt files
   - `save_path` → output `.npz` dataset
 
-### 2. **`Model_Training.py`**
-Train the SleepTransformer model on the preprocessed `.npz` data.
-- **Set paths:**
+### 2. **`Training_General.ipynb`**
+Train the SleepTransformer model on the preprocessed `.npz` data from step1.
+- **Set paths (optional):**
   - `ds_path` → input `.npz` dataset
-  - `model_path` → output path for saving model weights
+  - `Model_path` → output path for saving model weights
+  - by default the script will try to find a npz file in the same folder and save the trained weights in the same folder as well.
 
-### 3. **`Model_Testing.py`**
+### 3. **`Accuracy_Test.ipynb`**
 Evaluate a trained model on test data.
 - **Set paths:**
   - `ds_path` → test `.npz` dataset
-  - `model_path` → `.pth` file from training
+  - `model_path` → `.pth` file from training, by default it will try to find the pth in the same folder, change to manual directory if prefer.
 
-### 4. **`Score_new_EDF.py`**
-Use a trained model to predict sleep stages on new `.edf` files.
+### 4. **`Inference_General_ScanFolder.ipynb`**
+Use the trained model to predict sleep stages on new(unseen) `.edf` files.
 - **Input:** folder of new EDF files
 - **Output:** `.mat` file for each EDF containing predicted scores and power features
 - **Set paths:**
-  - `model_path` → `.pth` trained model
+  - `Model_path` → `.pth` trained model
   - `file_folder` → folder of EDFs to score
-  - `save_path` → folder to save `.mat` results
+  - by default mat file will be save to the same folder as EDF files with same file name + _REST.mat
 
 ### 5. **`quality_screening.m`**
 Matlab script used for manual screening for the sleep score predicted by REST
