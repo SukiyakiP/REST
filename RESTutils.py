@@ -129,6 +129,7 @@ def band_power(freqs, spectra, fmin=0.5, fmax=4):
 
 def compute_powers_welch(EEG,EMG, sfreq=512,s=4): #input should be raw EEG and EMG signals, this is for analysis and visual validation only, the extracted powers are not used in scoring
     EEG = np.asarray(EEG).flatten() # flatten the signal
+    EMG = np.asarray(EMG).flatten() # flatten the signal
     epoch_length = int(sfreq * s)    # Define epoch length (s seconds* sample frequency)
     n_epochs =  len(EEG) // epoch_length# Determine the number of complete epochs in the signal
     
@@ -318,4 +319,5 @@ def resample_to_target(signal, original_fs, target_fs):
     down = orig // factor
 
     return resample_poly(signal, up=up, down=down, axis=0)
+
 
