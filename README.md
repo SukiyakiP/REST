@@ -42,7 +42,7 @@ Matlab script used for manual screening for the sleep score predicted by REST
 Workflow 1: if user prefer training their own model using their own recordings. user shoud first compile a training dataset using 'Labeled_data_processing.ipynb`, then training using `Training_General.ipynb`, `Training_General.ipynb` will produce a pth file containing model structure and weight. Using `Inference_General_ScanFolder.ipynb` and the pth file, user can score new EDFs. `Accuracy_Test.ipynb` is optional, user can test the model accuracy on unseen and prelabeled recordings.
 
 Workflow 2:A pretrained model and weight is provided: 'Model_general.pth' this model is well generalize and should work with most mice. If user want to use the pretrained model, download the pth file and use it in 'Inference_General_ScanFolder.ipynb' to score new EDF, thus skipping the training process.' However, it is recommended that user use some prelabeled recording to test the usability of the model
-
+For uers prefer GUI, 'Inference_GUI_CPU.py'is available. Please make sure to download trained weight.
 Note: `Inference_General_ScanFolder.ipynb` and `CLabeled_data_processing.ipynb` require user to preset the keyword for the EEG and EMG channel name in the script for the correct channel to be detected and chosen.
 Note: it is recommended to do a fast manual qualityscreen with quality_screening.m (require matlab) to ensure classification quality is up to user's satisfation before performing any analysis.
 Note: Please feel free to contact me at jwang3276@wisc.edu for any questions, suggestions ,or tech support.
