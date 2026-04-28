@@ -4,7 +4,20 @@ Automated sleep-stage scoring for rodent EEG/EMG recordings. Classifies every 4-
 
 ---
 
-## Installation
+## Option A — Standalone Executable (No Python Required)
+
+A pre-built Windows executable is available on the [GitHub Releases](../../releases/latest) page.
+
+1. Go to **Releases** and download **REST_Inference_GUI.exe** under **V1.5**.
+2. Double-click the downloaded file to launch the GUI.
+
+No installation needed. Skip to [GUI — Quick Start](#gui--quick-start) below.
+
+---
+
+## Option B — Python Installation
+
+Required if you want to retrain the model or run the inference scripts.
 
 1. Install [Anaconda](https://www.anaconda.com/download) or [Miniconda](https://docs.conda.io/en/latest/miniconda.html).
 2. Create the environment:
@@ -19,7 +32,9 @@ Automated sleep-stage scoring for rodent EEG/EMG recordings. Classifies every 4-
 
 The GUI is the easiest way to score recordings. No coding required.
 
-**Launch:**
+**Launch (EXE):** Double-click `dist/SeizureDetector/SeizureDetector.exe`.
+
+**Launch (Python):**
 ```bash
 conda activate REST
 python Inference_GUI.py
