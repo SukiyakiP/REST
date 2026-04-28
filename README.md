@@ -37,8 +37,6 @@ Wait for **Model Status: Loaded ✅** before doing anything else.
 4. Click **Score** and wait for the progress bar to finish.
 5. A hypnogram will appear. Click **Save Results** to export the `.mat` file.
 
-> **Tip:** Press **Ctrl+P** to save a 300 DPI screenshot of the GUI.
-
 ---
 
 ### Batch Mode
