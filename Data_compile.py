@@ -1,5 +1,5 @@
 """
-Data_compile.py  —  REST V1.5
+Data_compile.py  —  REST V2.0
 ═══════════════════════════════════════════════════════════════════════════════
 Preprocesses raw EDF + score files into per-recording .npy files for lazy-
 loading during training.  This replaces the old approach of loading everything
@@ -10,8 +10,8 @@ Output layout (all files go to OUTPUT_DIR):
   all_scores.npy         int32    [total_epochs]             (concatenated labels)
   manifest.npz                    names, offsets, lengths
 
-Score encoding (stored):   1=Wake  2=NREM  3=REM  (original Sirenia / RM .txt)
-  -100 = ignored (unscored, artefact, or out-of-range)
+Score encoding (stored):   1=Wake  2=NREM  3=REM  4=Artefact
+  -100 = ignored (unscored or out-of-range)
 
 Usage:
     python Data_compile.py
@@ -34,7 +34,7 @@ device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 # Configuration  —  edit these paths as needed
 # ═══════════════════════════════════════════════════════════════════════════════
 
-OUTPUT_DIR = r"D:\Training data V1.5_tensor"
+OUTPUT_DIR = r"D:\Training data V2.0_tensor"
 
 # ── Original 7 animals (scored with RM .txt files) ──────────────────────────
 FP_EDF_ORIG = [
@@ -73,22 +73,45 @@ FS = 512  # native EDF sampling rate
 # Helpers
 # ═══════════════════════════════════════════════════════════════════════════════
 
+def _with_retry(label, fn, *args, retries=3, delay=5, **kwargs):
+    """Retry a network-drive I/O call on transient failure.
+
+    Catches FileNotFoundError / OSError / PermissionError, waits `delay`
+    seconds, and retries up to `retries` times.  Re-raises on final failure.
+    """
+    for attempt in range(retries):
+        try:
+            return fn(*args, **kwargs)
+        except (FileNotFoundError, OSError, IOError, PermissionError) as e:
+            if attempt < retries - 1:
+                print(f"  [retry] {label} failed (attempt {attempt+1}/{retries}): {e}. "
+                      f"Waiting {delay}s ...")
+                time.sleep(delay)
+            else:
+                raise
+
+
 def _load_orig_score(score_path):
-    """Read RM .txt score file.  Returns int32 array with -100 for ignored."""
-    df = pd.read_csv(score_path, delimiter=',')
+    """Read RM .txt score file.  Returns int32 array (1=W, 2=N, 3=R, 4=Art, -100=ignore)."""
+    df = _with_retry(f"read {os.path.basename(score_path)}",
+                     pd.read_csv, score_path, delimiter=',')
     score = df.iloc[:, 3].to_numpy().astype(np.int32)
     score[score > 3] = -100   # unscored
-    score[score == 0] = -100  # artefact → ignore
+    score[score == 0] = 4     # artefact
     return score
 
 
 def _load_tsv_score(tsv_path):
-    """Read Sirenia .tsv score file.  Returns int32 array with -100 for ignored."""
-    start_line = find_data_start(tsv_path, sep='\t', expected_columns=5)
-    df = pd.read_csv(tsv_path, sep='\t', skiprows=start_line + 1, header=None)
+    """Read Sirenia .tsv score file.  Returns int32 array (1=W, 2=N, 3=R, 4=Art, -100=ignore)."""
+    label = os.path.basename(tsv_path)
+    start_line = _with_retry(f"scan {label}",
+                             find_data_start, tsv_path, sep='\t', expected_columns=5)
+    df = _with_retry(f"read {label}",
+                     pd.read_csv, tsv_path, sep='\t',
+                     skiprows=start_line + 1, header=None)
     score = df.iloc[:, 4].to_numpy().astype(np.int32)
     score[score > 3] = -100   # unscored / out-of-range
-    score[score == 0] = -100  # artefact → ignore
+    score[score == 0] = 4     # artefact
     return score
 
 
@@ -177,7 +200,8 @@ def _scan_additional_dirs(dirs):
     for folder in dirs:
         tsv_files = {}
         edf_files = {}
-        for f in sorted(os.listdir(folder)):
+        entries = _with_retry(f"listdir {folder}", os.listdir, folder)
+        for f in sorted(entries):
             fp = os.path.join(folder, f)
             if f.endswith('.tsv'):
                 key = f.rsplit('_', 1)[0]
@@ -226,7 +250,9 @@ def main():
 
         # Sanity-check epoch count against EDF before full load
         try:
-            raw_probe = mne.io.read_raw_edf(edf_path, preload=False, verbose=False)
+            raw_probe = _with_retry(f"probe {os.path.basename(edf_path)}",
+                                    mne.io.read_raw_edf, edf_path,
+                                    preload=False, verbose=False)
             eeg_epochs = raw_probe.n_times // (FS * 4)
             raw_probe.close()
         except Exception as e:

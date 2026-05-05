@@ -20,18 +20,18 @@ batch_size = 256  # Batch size for training
 n_epochs = 100    # Number of training epochs
 f_bin = 130       # Feature bins per frame (65 EEG + 65 EMG)
 frames = 5        # STFT time frames per epoch
-n_classes = 3     # Number of sleep stages (Wake, NREM, REM)
+n_classes = 4     # Number of sleep stages (Wake, NREM, REM, Artifact)
 WeightedLoss = False
 Use_BatchNorm = True # Use 1D Batch Normalization (must be used in Inference as well)
 device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 
 # Data and model paths
-DATA_DIR   = r"D:\Training data V1.5_tensor"
-Model_path = r"M:\Alex\Python\REST V1.5\model_BatchNorm_2.pth"
+DATA_DIR   = r"D:\Training data V2.0_tensor"
+Model_path = r"M:\Alex\Python\REST V1.5\model_artifact.pth"
 
 model = REST(
     in_feat=f_bin,
-    n_classes=3,
+    n_classes=n_classes,
     win_len=window_size,
     d_model=256,
     nhead=8,
@@ -73,10 +73,10 @@ val_loader   = DataLoader(val_ds,   batch_size=batch_size, shuffle=False, num_wo
 
 # %%
 # Compute class weights from memory-mapped score array (no RAM spike)
-# Stored scores are 1-based (1=Wake, 2=NREM, 3=REM); shift to 0-based for class_weight
+# Stored scores are 1-based (1=Wake, 2=NREM, 3=REM, 4=Artifact); shift to 0-based for class_weight
 raw_scores  = train_ds.scores
 valid_mask  = raw_scores != -100
-valid_labels = raw_scores[valid_mask] - 1   # 0=Wake 1=NREM 2=REM
+valid_labels = raw_scores[valid_mask] - 1   # 0=Wake 1=NREM 2=REM 3=Artifact
 class_weights = compute_class_weight(
     'balanced',
     classes=np.unique(valid_labels),
@@ -167,6 +167,6 @@ all_preds   = all_preds[mask]
 all_targets = all_targets[mask]
 
 print("\nClassification Report (Validation Set):")
-print(classification_report(all_targets, all_preds, target_names=["Wake", "NREM", "REM"]))
+print(classification_report(all_targets, all_preds, target_names=["Wake", "NREM", "REM", "Artifact"]))
 print("Confusion Matrix:")
 print(confusion_matrix(all_targets, all_preds))

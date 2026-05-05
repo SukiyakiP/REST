@@ -10,7 +10,7 @@ Expects output from Data_compile.py in data_dir:
 
 Each __getitem__ returns:
   X  : float32 tensor  [win_len, frames, feat]   ready to feed REST model
-  Y  : int64   tensor  [win_len]                  labels (0=W, 1=N, 2=R, -100=ignore)
+  Y  : int64   tensor  [win_len]                  labels (0=W, 1=N, 2=R, 3=Art, -100=ignore)
 """
 
 import os
@@ -174,11 +174,11 @@ class SleepDataset(Dataset):
         # Reshape [win_len, frames*feat] → [win_len, frames, feat]
         X = X_flat.reshape(self.win_len, self.frames, self.feat)
 
-        # Convert stored 1-based labels → 0-based (0=Wake, 1=NREM, 2=REM)
-        # Stored: 1=Wake  2=NREM  3=REM  -100=ignore
+        # Convert stored 1-based labels → 0-based (0=Wake, 1=NREM, 2=REM, 3=Artifact)
+        # Stored: 1=Wake  2=NREM  3=REM  4=Artifact  -100=ignore
         Y = Y.astype(np.int64).copy()
         valid = Y != -100
-        Y[valid] = Y[valid] - 1   # → 0=Wake  1=NREM  2=REM
+        Y[valid] = Y[valid] - 1   # → 0=Wake  1=NREM  2=REM  3=Artifact
 
         return (torch.from_numpy(X.astype(np.float32)),
                 torch.from_numpy(Y))
