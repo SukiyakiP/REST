@@ -19,6 +19,8 @@ import numpy as np
 import torch
 from torch.utils.data import Dataset
 
+from ArtifactInjection import inject_artifacts
+
 
 class SleepDataset(Dataset):
     """
@@ -42,7 +44,8 @@ class SleepDataset(Dataset):
     def __init__(self, data_dir, win_len=90, step=60,
                  rem_repeat=3, cache_size=16,
                  split='train', val_split=0.2,
-                 frames=5, feat=130):
+                 frames=5, feat=130,
+                 inject_p=0.0, wake_share=0.8, inject_seed=0):
         super().__init__()
         self.data_dir  = data_dir
         self.win_len   = win_len
@@ -50,6 +53,10 @@ class SleepDataset(Dataset):
         self.cache_size = cache_size
         self.frames    = frames
         self.feat      = feat
+        self.inject_p   = float(inject_p)
+        self.wake_share = float(wake_share)
+        self._inject_rng = (np.random.RandomState(inject_seed)
+                            if self.inject_p > 0 else None)
         self._cache    = {}   # {rec_idx: memmap_array}
 
         # ── 1. Load manifest & scores ─────────────────────────────────────────
@@ -180,5 +187,12 @@ class SleepDataset(Dataset):
         valid = Y != -100
         Y[valid] = Y[valid] - 1   # → 0=Wake  1=NREM  2=REM  3=Artifact
 
-        return (torch.from_numpy(X.astype(np.float32)),
+        X = np.ascontiguousarray(X, dtype=np.float32)
+        if self._inject_rng is not None:
+            inject_artifacts(X, Y,
+                             inject_p=self.inject_p,
+                             wake_share=self.wake_share,
+                             rng=self._inject_rng)
+
+        return (torch.from_numpy(X),
                 torch.from_numpy(Y))

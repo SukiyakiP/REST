@@ -25,16 +25,16 @@ epoch_length = 4  # Epoch length in seconds
 window_size = 90 # Number of epochs in a sequence
 step=60 # overlapping step size for sequences
 batch_size = 256  # Batch size for training
-n_classes = 3   # Number of sleep stages (e.g., Wake, NREM, REM)
+n_classes = 4   # Number of sleep stages (Wake, NREM, REM, Artifact)
 f_bin=130 # Frequency bin for PSD computation
 device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 print(device)
 
 # %%
-Model_path=r"M:\Alex\Python\REST V1.5\model_BatchNorm_1.pth" # use BatchNorm_1
+Model_path=r"M:\Alex\Python\REST V1.5\model_artifact.pth"  # 4-class with Artifact head (no-inject baseline)
 model = REST(
     in_feat=f_bin,
-    n_classes=3,
+    n_classes=n_classes,
     win_len=window_size,
     d_model=256,
     nhead=8,
@@ -138,7 +138,7 @@ def process_edf(fp_edf, model, window_size, step, batch_size, device, HMM_smooth
                 all_preds.append(first_epoch_probs)
 
             # Viterbi Smoothing (Updated)
-            probs_flat = np.concatenate(all_preds, axis=0).reshape(-1, 3)
+            probs_flat = np.concatenate(all_preds, axis=0).reshape(-1, n_classes)
             if HMM_smoothing:
                 score = viterbi_smooth(probs_flat) + 1
             else:

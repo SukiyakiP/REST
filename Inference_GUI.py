@@ -26,19 +26,19 @@ if getattr(sys, 'frozen', False):
     BASE_DIR = sys._MEIPASS
     SCRIPT_DIR = os.path.dirname(sys.executable)
     # The bundled model is extracted to sys._MEIPASS
-    local_model = os.path.join(BASE_DIR, "model_BatchNorm_1.pth")
+    local_model = os.path.join(BASE_DIR, "model_artifact.pth")
 else:
     # If running as a standard python script
     BASE_DIR = os.path.dirname(os.path.abspath(__file__))
     SCRIPT_DIR = BASE_DIR
-    local_model = os.path.join(SCRIPT_DIR, "model_BatchNorm_1.pth")
+    local_model = os.path.join(SCRIPT_DIR, "model_artifact.pth")
 
 # Determine Default Model Path
 if os.path.exists(local_model):
     DEFAULT_MODEL_PATH = local_model
 else:
     # Fallback to the hardcoded path
-    DEFAULT_MODEL_PATH = r"M:\Alex\Python\REST V1.5\model_BatchNorm_1.pth"
+    DEFAULT_MODEL_PATH = r"M:\Alex\Python\REST V1.5\model_artifact.pth"
     
 
 FS = 512
@@ -46,7 +46,7 @@ EPOCH_LENGTH = 4
 WINDOW_SIZE = 90
 STEP = 60
 BATCH_SIZE = 128
-N_CLASSES = 3
+N_CLASSES = 4   # Wake, NREM, REM, Artifact
 F_BIN = 130
 DEVICE = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 USE_BATCHNORM = True
@@ -361,14 +361,26 @@ class RESTInferenceApp:
         
         # Plot Hypnogram
         self.ax.clear()
-        time_axis = np.arange(len(self.current_score)) * EPOCH_LENGTH / 3600.0 # Convert to hours
-        self.ax.plot(time_axis, self.current_score, drawstyle='steps-mid', color='b')
-        self.ax.set_yticks([1, 2, 3])
-        self.ax.set_yticklabels(['Wake', 'NREM', 'REM'])
+        time_axis = np.arange(len(self.current_score)) * EPOCH_LENGTH / 3600.0
+
+        # Sleep stages drawn in blue; artifact epochs drawn in red at y=4
+        score_f = self.current_score.astype(float)
+        score_sleep = score_f.copy()
+        score_sleep[score_sleep == 4] = np.nan   # gaps where artifact
+
+        score_art = np.full(len(score_f), np.nan)
+        art_mask = self.current_score == 4
+        score_art[art_mask] = 4.0
+
+        self.ax.plot(time_axis, score_sleep, drawstyle='steps-mid', color='steelblue')
+        if art_mask.any():
+            self.ax.plot(time_axis, score_art, drawstyle='steps-mid', color='red')
+
+        self.ax.set_yticks([1, 2, 3, 4])
+        self.ax.set_yticklabels(['Wake', 'NREM', 'REM', 'Artifact'])
         self.ax.set_xlabel('Time (Hours)')
         self.ax.set_title(f'Hypnogram: {os.path.basename(filepath)}')
-        self.ax.set_ylim(0.5, 3.5)
-        # Standard hypnogram format inverted per user request
+        self.ax.set_ylim(0.5, 4.5)
         self.canvas.draw()
         
     def _inference_fail(self, error_msg):

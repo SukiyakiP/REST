@@ -30,7 +30,7 @@ from RESTutils import compute_powers_welch_tensor, data_process_tensor, create_s
 # =============================================================================
 # MODEL CONFIGURATION - CHANGE THIS TO TEST DIFFERENT WEIGHTS
 # =============================================================================
-MODEL_PATH = r"M:\Alex\Python\REST V1.5\model_BatchNorm_1.pth"
+MODEL_PATH = r"M:\Alex\Python\REST V1.5\model_artifact.pth"
 
 # =============================================================================
 # Parameters (should match training configuration)

@@ -688,17 +688,16 @@ def viterbi_smooth(probs, transition_matrix=None):
         else:
             # Default 4-State: Wake, NREM, REM, Art
             # 0=Wake, 1=NREM, 2=REM, 3=Art
-            # Heavily diagonal = distinct states
-            # Physiologically:
-            # Wake <-> NREM (common)
-            # NREM <-> REM (common)
-            # Wake <-> REM (Very rare / Narcoleptic)
-            # Art <-> Any (common)
+            # Real motion artifacts often span 2-5 consecutive epochs.
+            # Previous Art self=2 made artifact transient → isolated predictions
+            # got dissolved by smoothing.  Bumping Art self to 30 (P_stay≈0.60)
+            # gives expected cluster length ≈2.5 epochs while still allowing
+            # short artifact bursts to be filtered out as noise.
             A = np.array([
-                [100, 20, 1, 10], # Wake -> W, N, R, A
-                [10, 100, 10, 1], # NREM -> W, N, R, A
-                [20, 5, 100, 1], # REM -> W, N, R, A
-                [5, 1, 1, 2],  # Art -> W, N, R, A
+                [100, 20, 1, 8],   # Wake -> W, N, R, A
+                [10, 100, 10, 3],  # NREM -> W, N, R, A
+                [20, 5, 100, 3],   # REM  -> W, N, R, A
+                [10, 5, 5, 30],    # Art  -> W, N, R, A  (P_stay 0.60)
             ])
         
         # Normalize rows
