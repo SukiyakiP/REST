@@ -6,20 +6,20 @@ loading during training.  This replaces the old approach of loading everything
 into RAM at once and saving a single monolithic .npz.
 
 Output layout (all files go to OUTPUT_DIR):
-  <recording_name>.npy   float32  [n_epochs, frames*feat]   (flattened STFT)
-  all_scores.npy         int32    [total_epochs]             (concatenated labels)
-  manifest.npz                    names, offsets, lengths
+  <recording_name>.npy         float32  [n_epochs, frames*feat]   (flattened STFT)
+  <recording_name>_score.npy   int32    [n_epochs]                (per-recording labels)
 
 Score encoding (stored):   1=Wake  2=NREM  3=REM  4=Artefact
   -100 = ignored (unscored or out-of-range)
 
 Usage:
     python Data_compile.py
-    (idempotent — skips recordings whose .npy already exists)
+    (idempotent — skips recordings whose .npy + _score.npy already exist)
 """
 
 import os
 import gc
+import re
 import time
 import numpy as np
 import mne
@@ -34,39 +34,24 @@ device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 # Configuration  —  edit these paths as needed
 # ═══════════════════════════════════════════════════════════════════════════════
 
-OUTPUT_DIR = r"D:\Training data V2.0_tensor"
+OUTPUT_DIR = r"D:\Training data Extended"
 
-# ── Original 7 animals (scored with RM .txt files) ──────────────────────────
-FP_EDF_ORIG = [
-    r"M:\EEG files\selected data for manual score\Sham\2A1_CD1M_Cohort4_5-25-24_reduced.edf",
-    r"M:\EEG files\selected data for manual score\Sham\2A2_CD1M_Cohort7_Week4_10-12-24_reduced.edf",
-    r"M:\EEG files\selected data for manual score\Sham\4A1_CD1F_Cohort6_Week4_08-23-24_reduced.edf",
-    r"M:\EEG files\selected data for manual score\TBI\3B1_CD1M_Cohort7_Week3_10-4-24_reduced.edf",
-    r"M:\EEG files\selected data for manual score\TBI\3B2_CD1M_Cohort5_Week4_7-14-24_reduced.edf",
-    r"M:\EEG files\selected data for manual score\TBI\5B1_CD1M_Cohort4_Week3_5-25-24_reduced.edf",
-    r"M:\EEG files\selected data for manual score\TBI\5B2_CD1F_Cohort6_Week4_08-25-24_reduced.edf",
+# Add training data folders here (non-recursive — only the immediate folder is scanned).
+# Each EDF is matched to the best .txt (RM format) or .tsv (Sirenia format) score file
+# in the same folder using fuzzy name matching (handles spaces, _reduced suffixes, etc.).
+TRAINING_DIRS = [r"M:\Alex\Python\Mouse Sleep Data\fmr1\5mo",
+                 r"M:\Alex\Python\Mouse Sleep Data\fmr1\Adult",
+                 r"M:\Alex\Python\Mouse Sleep Data\Additional_ELI",
+                 r"M:\Alex\Python\Mouse Sleep Data\Additional_RM",
+                 r"M:\Alex\Python\Mouse Sleep Data\Additional_TBI"
+    # r"M:\EEG files\...",
 ]
-FP_SCORE_ORIG = [
-    r"M:\EEG files\selected data for manual score\Sham\2A1_CD1M_Cohort4_RM.txt",
-    r"M:\EEG files\selected data for manual score\Sham\2A2_CD1M_Cohort7_RM.txt",
-    r"M:\EEG files\selected data for manual score\Sham\4A1_CD1F_Cohort6_RM.txt",
-    r"M:\EEG files\selected data for manual score\TBI\3B1_CD1M_Cohort7_RM.txt",
-    r"M:\EEG files\selected data for manual score\TBI\3B2_CD1M_Cohort5_RM.txt",
-    r"M:\EEG files\selected data for manual score\TBI\5B1_CD1M_Cohort4_RM.txt",
-    r"M:\EEG files\selected data for manual score\TBI\5B2_CD1F_Cohort6_RM.txt",
-]
-
-# ── Additional Westmark animals (scored with Sirenia .tsv files) ─────────────
-ADDITIONAL_DIRS = [
-    r"M:\Alex\Python\Mouse Sleep Data\fmr1\5mo",
-    r"M:\Alex\Python\Mouse Sleep Data\fmr1\Adult",
-]
-
-# Epoch count guard for additional recordings (sanity check)
-MIN_EPOCHS = 21550
-MAX_EPOCHS = 21610
 
 FS = 512  # native EDF sampling rate
+
+# Trailing suffixes stripped from file stems before matching.
+# Covers both EDF-side (_data, _reduced, …) and score-side (_scores) variants.
+_EDF_SUFFIXES = ('_data', '_scores', '_reduced', '_export', '_screenprint_export', '_screenprint')
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -91,19 +76,78 @@ def _with_retry(label, fn, *args, retries=3, delay=5, **kwargs):
                 raise
 
 
-def _load_orig_score(score_path):
+def _load_rm_score(score_path):
     """Read RM .txt score file.  Returns int32 array (1=W, 2=N, 3=R, 4=Art, -100=ignore)."""
+    with open(score_path, 'r', errors='replace') as fh:
+        first = fh.readline()
+    sep = '\t' if '\t' in first else ','
     df = _with_retry(f"read {os.path.basename(score_path)}",
-                     pd.read_csv, score_path, delimiter=',')
+                     pd.read_csv, score_path, delimiter=sep)
     score = df.iloc[:, 3].to_numpy().astype(np.int32)
     score[score > 3] = -100   # unscored
     score[score == 0] = 4     # artefact
     return score
 
 
-def _load_tsv_score(tsv_path):
-    """Read Sirenia .tsv score file.  Returns int32 array (1=W, 2=N, 3=R, 4=Art, -100=ignore)."""
+def _load_bout_tsv_score(tsv_path):
+    """Read Sirenia bout-summary .tsv (one row per bout, not per epoch).
+
+    Columns: Start Epoch | Start Time | Score Number | Score Name | Length (s) | ...
+    Score numbers: 0=Artifact→4, 1=Wake→1, 2=NREM→2, 3=REM→3.
+    Expands bouts into a per-epoch int32 array (-100 = gap/unscored).
+    """
     label = os.path.basename(tsv_path)
+    with open(tsv_path, 'r', errors='replace') as fh:
+        lines = fh.readlines()
+
+    header_idx = next((i for i, l in enumerate(lines)
+                       if l.strip().startswith('Start Epoch')), None)
+    if header_idx is None:
+        raise ValueError(f"Cannot find 'Start Epoch' header in {label}")
+
+    rows = []
+    for line in lines[header_idx + 1:]:
+        parts = line.strip().split('\t')
+        if len(parts) < 5:
+            continue
+        try:
+            rows.append((int(parts[0]), int(parts[2]), float(parts[4])))
+        except ValueError:
+            continue
+
+    if not rows:
+        raise ValueError(f"No bout data found in {label}")
+
+    last_start, _, last_len = rows[-1]
+    total_epochs = last_start + int(round(last_len / 4))
+    score = np.full(total_epochs, -100, dtype=np.int32)
+
+    for start_ep, score_num, length_sec in rows:
+        n_ep = int(round(length_sec / 4))
+        mapped = 4 if score_num == 0 else score_num   # 0=Artifact→4
+        score[start_ep: start_ep + n_ep] = mapped
+
+    return score
+
+
+def _load_tsv_score(tsv_path):
+    """Read Sirenia .tsv score file (auto-detects epoch-by-epoch vs bout-summary).
+    Returns int32 array (1=W, 2=N, 3=R, 4=Art, -100=ignore)."""
+    label = os.path.basename(tsv_path)
+
+    # Peek at the first 60 lines to detect the bout-summary format
+    try:
+        with open(tsv_path, 'r', errors='replace') as fh:
+            for _ in range(60):
+                line = fh.readline()
+                if not line:
+                    break
+                if line.strip().startswith('Start Epoch'):
+                    return _load_bout_tsv_score(tsv_path)
+    except Exception:
+        pass
+
+    # Epoch-by-epoch format
     start_line = _with_retry(f"scan {label}",
                              find_data_start, tsv_path, sep='\t', expected_columns=5)
     df = _with_retry(f"read {label}",
@@ -128,14 +172,26 @@ def _process_edf(edf_path):
                 time.sleep(5)
             else:
                 raise e
-                
+
+    # Downsample 1024 Hz recordings to the standard 512 Hz
+    if raw.info['sfreq'] != FS:
+        raw.resample(FS, npad='auto')
+
     ch = raw.info['ch_names']
-    eeg_idx = [i for i, n in enumerate(ch) if 'RF' in n]
-    emg_idx = [i for i, n in enumerate(ch) if 'EMG' in n]
+    # EEG: RF\d* first (e.g. RF, RF3), then bare F\d* (e.g. F, F3) as fallback.
+    # The lookbehind/lookahead ensure F3 matches but LF3/RF3 do not in the fallback.
+    eeg_idx = [i for i, n in enumerate(ch) if re.search(r'RF\d*', n, re.I)]
+    if not eeg_idx:
+        eeg_idx = [i for i, n in enumerate(ch)
+                   if re.search(r'(?<![A-Za-z])F\d*(?![A-Za-z])', n, re.I)]
+    emg_idx = [i for i, n in enumerate(ch) if re.search(r'EMG', n, re.I)]
+    if not eeg_idx:
+        raise ValueError(f"No EEG channel (RF/F) found in {edf_path}. "
+                         f"Available channels: {ch}")
     EEG = raw.get_data(eeg_idx)
     EMG = raw.get_data(emg_idx)
     raw.close()
-    
+
     with torch.no_grad():
         EEG_STFT, EMG_STFT = data_process_tensor(EEG, EMG, fs=512, device=device)
     return EEG_STFT, EMG_STFT   # returns (EEG_STFT, EMG_STFT)
@@ -143,18 +199,19 @@ def _process_edf(edf_path):
 
 def _save_recording(name, edf_path, score, out_dir):
     """
-    Process one recording and save to <out_dir>/<name>.npy.
-    Returns (n_epochs, score_trimmed) or (None, None) on failure.
+    Process one recording and save <name>.npy and <name>_score.npy to out_dir.
+    Returns n_epochs or None on failure.
     """
-    out_path = os.path.join(out_dir, f"{name}.npy")
+    out_path   = os.path.join(out_dir, f"{name}.npy")
+    score_path = os.path.join(out_dir, f"{name}_score.npy")
 
-    # Skip if already processed (idempotent)
-    if os.path.exists(out_path):
+    # Skip if both files already exist (idempotent)
+    if os.path.exists(out_path) and os.path.exists(score_path):
         try:
             existing = np.load(out_path, mmap_mode='r')
             n = existing.shape[0]
             print(f"  [skip] {name}  ({n} epochs already compiled)")
-            return n, score[:n]
+            return n
         except Exception:
             pass  # corrupted — re-process
 
@@ -165,7 +222,7 @@ def _save_recording(name, edf_path, score, out_dir):
         gc.collect()
         if torch.cuda.is_available():
             torch.cuda.empty_cache()
-        return None, None
+        return None
 
     # Concatenate EEG + EMG along feature dim → [n_epochs, frames, 2*bins]
     STFT = np.concatenate([EEG_STFT, EMG_STFT], axis=-1)  # [N, frames, feat]
@@ -175,14 +232,15 @@ def _save_recording(name, edf_path, score, out_dir):
     flat = STFT.reshape(N, frames * feat).astype(np.float32)
 
     # Align with score
-    n_epochs = min(N, len(score))
-    flat = flat[:n_epochs]
-    score = score[:n_epochs]
+    n_epochs      = min(N, len(score))
+    flat          = flat[:n_epochs]
+    score_trimmed = score[:n_epochs]
 
     np.save(out_path, flat)
+    np.save(score_path, score_trimmed)
     del EEG_STFT, EMG_STFT, STFT, flat
     gc.collect()
-    
+
     if torch.cuda.is_available():
         torch.cuda.empty_cache()
         if hasattr(torch.backends.cuda, 'cufft_plan_cache'):
@@ -191,26 +249,80 @@ def _save_recording(name, edf_path, score, out_dir):
             except:
                 pass
 
-    return n_epochs, score
+    return n_epochs
 
 
-def _scan_additional_dirs(dirs):
-    """Return sorted list of (name, edf_path, tsv_path) pairs from additional dirs."""
+def _normalize_stem(stem):
+    """Normalize a file stem for fuzzy matching.
+
+    Removes spaces, lowercases, and strips known EDF-only trailing suffixes so
+    that e.g. 'Day 4DMSO5122_reduced' → 'day4dmso5122'.
+    """
+    s = stem.replace(' ', '').lower()
+    for suf in _EDF_SUFFIXES:
+        if s.endswith(suf.lower()):
+            s = s[: -len(suf)]
+            break  # strip at most one suffix
+    return s
+
+
+def _scan_dirs(dirs):
+    """Scan each folder in dirs for EDF+score pairs using fuzzy name matching.
+
+    For each EDF the function looks for a companion .txt (RM format) or .tsv
+    (Sirenia format) score file in the same folder.  Matching is done on
+    normalized stems (spaces removed, lower-cased, EDF suffixes stripped).
+
+    Returns sorted list of (edf_stem, edf_path, score_path, fmt) where
+    fmt is 'rm' or 'tsv'.
+    """
     pairs = []
     for folder in dirs:
-        tsv_files = {}
-        edf_files = {}
-        entries = _with_retry(f"listdir {folder}", os.listdir, folder)
+        try:
+            entries = _with_retry(f"listdir {folder}", os.listdir, folder)
+        except Exception as e:
+            print(f"  [ERROR] Cannot list {folder}: {e}")
+            continue
+
+        # Build score lookup: normalized_key → (path, fmt)
+        # .txt (RM) takes priority over .tsv when both exist for the same key.
+        score_map = {}
         for f in sorted(entries):
-            fp = os.path.join(folder, f)
-            if f.endswith('.tsv'):
-                key = f.rsplit('_', 1)[0]
-                tsv_files[key] = fp
-            elif f.endswith('.edf'):
-                key = f.rsplit('_', 1)[0]
-                edf_files[key] = fp
-        for key in sorted(set(edf_files) & set(tsv_files)):
-            pairs.append((key, edf_files[key], tsv_files[key]))
+            stem = os.path.splitext(f)[0]
+            nkey = _normalize_stem(stem)
+            fl = f.lower()
+            if fl.endswith('.txt'):
+                score_map[nkey] = (os.path.join(folder, f), 'rm')
+            elif fl.endswith('.tsv') and nkey not in score_map:
+                score_map[nkey] = (os.path.join(folder, f), 'tsv')
+
+        # Match each EDF to a score file
+        for f in sorted(entries):
+            if not f.lower().endswith('.edf'):
+                continue
+            edf_path = os.path.join(folder, f)
+            edf_stem = os.path.splitext(f)[0]
+            edf_key  = _normalize_stem(edf_stem)
+
+            # 1. Exact match after normalization
+            if edf_key in score_map:
+                score_path, fmt = score_map[edf_key]
+                pairs.append((edf_stem, edf_path, score_path, fmt))
+                continue
+
+            # 2. Prefix match — score name is a leading substring of EDF key
+            #    (or vice-versa).  Pick the longest matching score key.
+            best = None
+            for skey, (sp, fmt) in score_map.items():
+                if edf_key.startswith(skey) or skey.startswith(edf_key):
+                    if best is None or len(skey) > len(best[0]):
+                        best = (skey, sp, fmt)
+            if best:
+                _, score_path, fmt = best
+                pairs.append((edf_stem, edf_path, score_path, fmt))
+            else:
+                print(f"  [warn] No score file found for {f!r} in {folder}")
+
     return pairs
 
 
@@ -222,80 +334,36 @@ def main():
     os.makedirs(OUTPUT_DIR, exist_ok=True)
     print(f"Output directory: {OUTPUT_DIR}\n")
 
-    names = []
-    lengths = []
-    all_scores_list = []
-
-    # ── 1. Original 7 animals ─────────────────────────────────────────────────
+    # ── Discover all EDF+score pairs ──────────────────────────────────────────
+    pairs = _scan_dirs(TRAINING_DIRS)
     print(f"{'─'*60}")
-    print(f"Processing {len(FP_EDF_ORIG)} original animals ...")
-    for edf_path, score_path in tqdm(zip(FP_EDF_ORIG, FP_SCORE_ORIG), total=len(FP_EDF_ORIG), desc="Original"):
-        name = os.path.splitext(os.path.basename(edf_path))[0]
-        score = _load_orig_score(score_path)
+    print(f"Found {len(pairs)} EDF+score pair(s) across {len(TRAINING_DIRS)} folder(s).")
+    print(f"{'─'*60}\n")
 
-        n, sc = _save_recording(name, edf_path, score, OUTPUT_DIR)
+    names   = []
+    lengths = []
+
+    # ── Process each pair ────────────────────────────────────────────────────
+    for edf_stem, edf_path, score_path, fmt in tqdm(pairs, desc="Compiling"):
+        if fmt == 'rm':
+            score = _load_rm_score(score_path)
+        else:
+            score = _load_tsv_score(score_path)
+
+        n = _save_recording(edf_stem, edf_path, score, OUTPUT_DIR)
         if n is not None:
-            names.append(name)
+            names.append(edf_stem)
             lengths.append(n)
-            all_scores_list.append(sc)
         time.sleep(0.05)
 
-    # ── 2. Additional Westmark animals ────────────────────────────────────────
-    additional_pairs = _scan_additional_dirs(ADDITIONAL_DIRS)
-    print(f"\n{'─'*60}")
-    print(f"Processing {len(additional_pairs)} additional animals ...")
-
-    for name, edf_path, tsv_path in tqdm(additional_pairs, desc="Additional"):
-        score = _load_tsv_score(tsv_path)
-
-        # Sanity-check epoch count against EDF before full load
-        try:
-            raw_probe = _with_retry(f"probe {os.path.basename(edf_path)}",
-                                    mne.io.read_raw_edf, edf_path,
-                                    preload=False, verbose=False)
-            eeg_epochs = raw_probe.n_times // (FS * 4)
-            raw_probe.close()
-        except Exception as e:
-            print(f"  [ERROR] Cannot probe {name}: {e}")
-            continue
-
-        score_epochs = len(score)
-        if not (MIN_EPOCHS <= score_epochs <= MAX_EPOCHS and
-                MIN_EPOCHS <= eeg_epochs  <= MAX_EPOCHS):
-            print(f"  [skip] {name}: epoch count mismatch "
-                  f"(score={score_epochs}, eeg={eeg_epochs})")
-            continue
-
-        n, sc = _save_recording(name, edf_path, score, OUTPUT_DIR)
-        if n is not None:
-            names.append(name)
-            lengths.append(n)
-            all_scores_list.append(sc)
-        time.sleep(0.05)
-
-    # ── 3. Save aggregate metadata ────────────────────────────────────────────
     if not names:
         print("\nNo recordings compiled successfully — nothing to save.")
         return
 
-    all_scores = np.concatenate(all_scores_list).astype(np.int32)
-    offsets = np.concatenate([[0], np.cumsum(lengths[:-1])]).astype(np.int64)
-
-    scores_path   = os.path.join(OUTPUT_DIR, 'all_scores.npy')
-    manifest_path = os.path.join(OUTPUT_DIR, 'manifest.npz')
-
-    np.save(scores_path, all_scores)
-    np.savez(manifest_path,
-             names   = np.array(names, dtype=object),
-             offsets = offsets,
-             lengths = np.array(lengths, dtype=np.int64))
-
     print(f"\n{'═'*60}")
     print(f"Compilation complete!")
-    print(f"  Recordings : {len(names)}")
-    print(f"  Total epochs: {len(all_scores):,}")
-    print(f"  Scores     : {scores_path}")
-    print(f"  Manifest   : {manifest_path}")
+    print(f"  Recordings  : {len(names)}")
+    print(f"  Total epochs: {sum(lengths):,}")
     print(f"{'═'*60}")
 
 

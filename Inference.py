@@ -61,7 +61,7 @@ model.eval()  # Set the model to evaluation mode
 #     r"M:\EEG files\2025\DOD Cohort 12\headcap",r"M:\EEG files\2025\DOD Cohort 13\headcap",r"M:\EEG files\2025\DOD Cohort 13\TBI",r"M:\EEG files\2025\DOD Cohort 14\headcap",
 #     r"M:\EEG files\2025\DOD Cohort 14\TBI",r"M:\EEG files\2026\DOD Cohort 15\headcap",r"M:\EEG files\2026\DOD Cohort 15\TBI")
 # edf_folder = [r"M:\Alex\REST-Testing"]
-edf_folder = [r"M:\EEG files\2026\C57\Reduced"]
+edf_folder = [r"M:\EEG files\2026\DBA\Reduced"]
 # edf_folder = (r"M:\EEG files\2026\DOD Cohort 16\headcap",r"M:\EEG files\2026\DOD Cohort 16\TBI")
 edf_files = []  # Initialize edf_files as an empty list
 for folder in edf_folder:

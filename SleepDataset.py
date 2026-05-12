@@ -1,12 +1,13 @@
 """
-SleepDataset.py  —  REST V1.5
+SleepDataset.py  —  REST V2.0
 ═══════════════════════════════════════════════════════════════════════════════
-PyTorch Dataset for training REST V1.5.
+PyTorch Dataset for training REST.
 
 Expects output from Data_compile.py in data_dir:
   <name>.npy        float32  [n_epochs, frames*feat]   (flattened STFT per epoch)
-  all_scores.npy    int32    [total_epochs]
-  manifest.npz      names, offsets, lengths
+  <name>_score.npy  int32    [n_epochs]                 (per-recording labels)
+
+Recordings are discovered by scanning for *_score.npy files — no manifest needed.
 
 Each __getitem__ returns:
   X  : float32 tensor  [win_len, frames, feat]   ready to feed REST model
@@ -30,7 +31,7 @@ class SleepDataset(Dataset):
 
     Parameters
     ----------
-    data_dir     : str   — folder with .npy, all_scores.npy, manifest.npz
+    data_dir     : str   — folder with <name>.npy and <name>_score.npy files
     win_len      : int   — number of epochs per window (default 90)
     step         : int   — stride between window start positions (default 60)
     rem_repeat   : int   — how many extra copies of REM-containing windows (default 3)
@@ -47,33 +48,34 @@ class SleepDataset(Dataset):
                  frames=5, feat=130,
                  inject_p=0.0, wake_share=0.8, inject_seed=0):
         super().__init__()
-        self.data_dir  = data_dir
-        self.win_len   = win_len
-        self.split     = split
-        self.cache_size = cache_size
-        self.frames    = frames
-        self.feat      = feat
-        self.inject_p   = float(inject_p)
-        self.wake_share = float(wake_share)
+        self.data_dir    = data_dir
+        self.win_len     = win_len
+        self.split       = split
+        self.cache_size  = cache_size
+        self.frames      = frames
+        self.feat        = feat
+        self.inject_p    = float(inject_p)
+        self.wake_share  = float(wake_share)
         self._inject_rng = (np.random.RandomState(inject_seed)
                             if self.inject_p > 0 else None)
-        self._cache    = {}   # {rec_idx: memmap_array}
+        self._cache       = {}   # {rec_idx: feature memmap}
+        self._score_cache = {}   # {rec_idx: score memmap}
 
-        # ── 1. Load manifest & scores ─────────────────────────────────────────
-        manifest_path = os.path.join(data_dir, 'manifest.npz')
-        scores_path   = os.path.join(data_dir, 'all_scores.npy')
+        # ── 1. Discover recordings by scanning for *_score.npy files ──────────
+        score_files = sorted(
+            f for f in os.listdir(data_dir)
+            if f.endswith('_score.npy')
+        )
+        if not score_files:
+            raise FileNotFoundError(
+                f"No *_score.npy files found in {data_dir}. Run Data_compile.py first.")
 
-        if not os.path.exists(manifest_path):
-            raise FileNotFoundError(f"Missing {manifest_path}. Run Data_compile.py first.")
-        if not os.path.exists(scores_path):
-            raise FileNotFoundError(f"Missing {scores_path}. Run Data_compile.py first.")
-
-        manifest = np.load(manifest_path, allow_pickle=True)
-        self.scores = np.load(scores_path, mmap_mode='r')   # lazy scores
-
-        all_names   = manifest['names']
-        all_offsets = manifest['offsets']
-        all_lengths = manifest['lengths']
+        all_names = np.array([f[:-len('_score.npy')] for f in score_files], dtype=object)
+        # Lengths from score files (reads only the numpy header, not the full array)
+        all_lengths = np.array([
+            np.load(os.path.join(data_dir, f), mmap_mode='r').shape[0]
+            for f in score_files
+        ], dtype=np.int64)
         n_total = len(all_names)
 
         # ── 2. Deterministic train/val split (by recording) ───────────────────
@@ -82,15 +84,10 @@ class SleepDataset(Dataset):
         rng.shuffle(idx)
         n_val = int(n_total * val_split)
 
-        if split == 'train':
-            chosen = idx[n_val:]
-        else:
-            chosen = idx[:n_val]
+        chosen = idx[n_val:] if split == 'train' else idx[:n_val]
 
         self.rec_names   = all_names[chosen]
-        self.rec_offsets = all_offsets[chosen]
         self.rec_lengths = all_lengths[chosen]
-
         n_recs = len(self.rec_names)
         print(f"[SleepDataset] {split.upper()}: {n_recs}/{n_total} recordings")
 
@@ -108,9 +105,8 @@ class SleepDataset(Dataset):
             rem_idx    = []
             normal_idx = []
             for i, (ri, s) in enumerate(self._index):
-                g_start = int(self.rec_offsets[ri]) + s
-                labels  = self.scores[g_start : g_start + win_len]
-                if np.any(labels == 3):   # 3 = REM
+                labels = self._get_score(ri)[s : s + win_len]
+                if np.any(labels == 3):   # 3 = REM (stored 1-based)
                     rem_idx.append(i)
                 else:
                     normal_idx.append(i)
@@ -127,22 +123,28 @@ class SleepDataset(Dataset):
     # ── Pickle support for DataLoader workers ─────────────────────────────────
     def __getstate__(self):
         state = self.__dict__.copy()
-        state['_cache'] = {}   # don't pickle open file handles
+        state['_cache']       = {}   # don't pickle open file handles
+        state['_score_cache'] = {}
         return state
 
     def __setstate__(self, state):
         self.__dict__.update(state)
         if '_cache' not in self.__dict__:
             self._cache = {}
+        if '_score_cache' not in self.__dict__:
+            self._score_cache = {}
 
     def __len__(self):
         return len(self._sample_ids)
 
-    # ── memmap LRU cache ──────────────────────────────────────────────────────
+    # ── memmap LRU caches ─────────────────────────────────────────────────────
     def _open_memmap(self, rec_idx):
         name = str(self.rec_names[rec_idx])
-        path = os.path.join(self.data_dir, f"{name}.npy")
-        return np.load(path, mmap_mode='r')
+        return np.load(os.path.join(self.data_dir, f"{name}.npy"), mmap_mode='r')
+
+    def _open_score_memmap(self, rec_idx):
+        name = str(self.rec_names[rec_idx])
+        return np.load(os.path.join(self.data_dir, f"{name}_score.npy"), mmap_mode='r')
 
     def _get_data(self, rec_idx):
         if rec_idx in self._cache:
@@ -155,20 +157,31 @@ class SleepDataset(Dataset):
         self._cache[rec_idx] = data
         return data
 
+    def _get_score(self, rec_idx):
+        if rec_idx in self._score_cache:
+            sc = self._score_cache.pop(rec_idx)
+            self._score_cache[rec_idx] = sc   # move to end (LRU)
+            return sc
+        sc = self._open_score_memmap(rec_idx)
+        if len(self._score_cache) >= self.cache_size:
+            del self._score_cache[next(iter(self._score_cache))]
+        self._score_cache[rec_idx] = sc
+        return sc
+
     def _safe_slice(self, rec_idx, local_start):
         """Read one window with retry + stale-handle recovery."""
         max_retries = 6
         delay = 0.5
         for attempt in range(max_retries):
             try:
-                data = self._get_data(rec_idx)
-                X = data[local_start : local_start + self.win_len].copy()   # [W, flat]
-                g_start = int(self.rec_offsets[rec_idx]) + local_start
-                Y = self.scores[g_start : g_start + self.win_len].copy()    # [W]
+                X = self._get_data(rec_idx)[local_start : local_start + self.win_len].copy()
+                Y = self._get_score(rec_idx)[local_start : local_start + self.win_len].copy()
                 return X, Y
             except (OSError, IOError, ValueError):
                 if rec_idx in self._cache:
                     del self._cache[rec_idx]
+                if rec_idx in self._score_cache:
+                    del self._score_cache[rec_idx]
                 if attempt == max_retries - 1:
                     raise
                 time.sleep(delay)
