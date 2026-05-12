@@ -21,10 +21,12 @@ import os
 import gc
 import re
 import time
+from math import gcd
 import numpy as np
-import mne
+import pyedflib
 import pandas as pd
 from tqdm import tqdm
+from scipy.signal import resample_poly
 import torch
 from RESTutils import find_data_start, data_process_tensor
 
@@ -159,42 +161,76 @@ def _load_tsv_score(tsv_path):
     return score
 
 
+def _resample_to_fs(sig, src_fs):
+    """Resample 1-D signal from src_fs to FS using polyphase filtering."""
+    src_fs = int(round(src_fs))
+    if src_fs == FS:
+        return sig
+    print(f"  resample: {src_fs} → {FS} Hz ...")
+    g = gcd(src_fs, FS)
+    return resample_poly(sig, up=FS // g, down=src_fs // g)
+
+
 def _process_edf(edf_path):
-    """Read EDF → return (EEG_STFT, EMG_STFT) via data_process()."""
-    raw = None
+    """Read EDF → return (EEG_STFT, EMG_STFT) via data_process_tensor()."""
+    f = None
     for attempt in range(3):
         try:
-            raw = mne.io.read_raw_edf(edf_path, preload=True, verbose=False)
+            f = pyedflib.EdfReader(edf_path)
             break
         except Exception as e:
             if attempt < 2:
-                print(f"Failed to load {edf_path} (Attempt {attempt + 1}/3). Waiting 5 seconds...")
+                print(f"  Failed to open (attempt {attempt+1}/3): {e}. Waiting 5 s ...")
                 time.sleep(5)
             else:
-                raise e
+                raise
 
-    # Downsample 1024 Hz recordings to the standard 512 Hz
-    if raw.info['sfreq'] != FS:
-        raw.resample(FS, npad='auto')
+    labels   = f.getSignalLabels()          # list of channel name strings, in EDF order
+    sfreqs   = [f.getSampleFrequency(i) for i in range(f.signals_in_file)]
+    dur_min  = f.getFileDuration() / 60
+    print(f"  loaded  : {dur_min:.1f} min  |  channels: {labels}")
 
-    ch = raw.info['ch_names']
-    # EEG: RF\d* first (e.g. RF, RF3), then bare F\d* (e.g. F, F3) as fallback.
-    # The lookbehind/lookahead ensure F3 matches but LF3/RF3 do not in the fallback.
-    eeg_idx = [i for i, n in enumerate(ch) if re.search(r'RF\d*', n, re.I)]
-    if not eeg_idx:
-        eeg_idx = [i for i, n in enumerate(ch)
-                   if re.search(r'(?<![A-Za-z])F\d*(?![A-Za-z])', n, re.I)]
-    emg_idx = [i for i, n in enumerate(ch) if re.search(r'EMG', n, re.I)]
-    if not eeg_idx:
-        raise ValueError(f"No EEG channel (RF/F) found in {edf_path}. "
-                         f"Available channels: {ch}")
-    EEG = raw.get_data(eeg_idx)
-    EMG = raw.get_data(emg_idx)
-    raw.close()
+    # Find EEG: prefer RF\d* (e.g. RF, RF3); fall back to bare F\d* (e.g. F, F3).
+    # Lookbehind/ahead keep 'F3' but block 'RF3' and 'LF3' in the fallback.
+    eeg_candidates = [i for i, l in enumerate(labels) if re.search(r'RF\d*', l, re.I)]
+    if not eeg_candidates:
+        eeg_candidates = [i for i, l in enumerate(labels)
+                          if re.search(r'(?<![A-Za-z])F\d*(?![A-Za-z])', l, re.I)]
+    emg_candidates = [i for i, l in enumerate(labels) if re.search(r'EMG', l, re.I)]
+
+    if not eeg_candidates:
+        f.close()
+        raise ValueError(f"No EEG channel (RF/F) found in {edf_path}. Available: {labels}")
+    if not emg_candidates:
+        f.close()
+        raise ValueError(f"No EMG channel found in {edf_path}. Available: {labels}")
+
+    eeg_idx = eeg_candidates[0]
+    emg_idx = emg_candidates[0]
+    if len(eeg_candidates) > 1:
+        print(f"  [warn] multiple EEG candidates "
+              f"{[labels[i] for i in eeg_candidates]}; using '{labels[eeg_idx]}'")
+    if len(emg_candidates) > 1:
+        print(f"  [warn] multiple EMG candidates "
+              f"{[labels[i] for i in emg_candidates]}; using '{labels[emg_idx]}'")
+    print(f"  channels: EEG='{labels[eeg_idx]}' @ {sfreqs[eeg_idx]:.0f} Hz  |  "
+          f"EMG='{labels[emg_idx]}' @ {sfreqs[emg_idx]:.0f} Hz")
+
+    # readSignal(i) returns the 1-D signal at that exact EDF index — no ordering risk
+    EEG = f.readSignal(eeg_idx)   # float64, 1-D
+    EMG = f.readSignal(emg_idx)   # float64, 1-D
+    f.close()
+
+    EEG = _resample_to_fs(EEG, sfreqs[eeg_idx])
+    EMG = _resample_to_fs(EMG, sfreqs[emg_idx])
+
+    # data_process_tensor expects [1, n_samples]
+    EEG = EEG[np.newaxis, :]
+    EMG = EMG[np.newaxis, :]
 
     with torch.no_grad():
-        EEG_STFT, EMG_STFT = data_process_tensor(EEG, EMG, fs=512, device=device)
-    return EEG_STFT, EMG_STFT   # returns (EEG_STFT, EMG_STFT)
+        EEG_STFT, EMG_STFT = data_process_tensor(EEG, EMG, fs=FS, device=device)
+    return EEG_STFT, EMG_STFT
 
 
 def _save_recording(name, edf_path, score, out_dir):
@@ -344,7 +380,13 @@ def main():
     lengths = []
 
     # ── Process each pair ────────────────────────────────────────────────────
-    for edf_stem, edf_path, score_path, fmt in tqdm(pairs, desc="Compiling"):
+    n_pairs = len(pairs)
+    for idx, (edf_stem, edf_path, score_path, fmt) in enumerate(pairs):
+        size_mb = os.path.getsize(edf_path) / 1e6
+        print(f"\n[{idx+1}/{n_pairs}] {edf_stem}")
+        print(f"  edf  : {edf_path}  ({size_mb:.0f} MB)")
+        print(f"  score: {score_path}  [{fmt}]")
+
         if fmt == 'rm':
             score = _load_rm_score(score_path)
         else:
