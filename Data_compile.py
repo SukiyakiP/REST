@@ -21,12 +21,9 @@ import os
 import gc
 import re
 import time
-from math import gcd
 import numpy as np
-import pyedflib
+import mne
 import pandas as pd
-from tqdm import tqdm
-from scipy.signal import resample_poly
 import torch
 from RESTutils import find_data_start, data_process_tensor
 
@@ -79,12 +76,26 @@ def _with_retry(label, fn, *args, retries=3, delay=5, **kwargs):
 
 
 def _load_rm_score(score_path):
-    """Read RM .txt score file.  Returns int32 array (1=W, 2=N, 3=R, 4=Art, -100=ignore)."""
+    """Read RM .txt score file.  Returns int32 array (1=W, 2=N, 3=R, 4=Art, -100=ignore).
+
+    Handles three formats:
+      - Tab-separated (standard RM export)
+      - Comma-separated (standard CSV)
+      - Outer-quoted CSV: each row wrapped in double-quotes — "col1,col2,..."
+    """
     with open(score_path, 'r', errors='replace') as fh:
-        first = fh.readline()
-    sep = '\t' if '\t' in first else ','
-    df = _with_retry(f"read {os.path.basename(score_path)}",
-                     pd.read_csv, score_path, delimiter=sep)
+        lines = fh.readlines()
+
+    non_empty = [l.rstrip('\n') for l in lines if l.strip()]
+    first = non_empty[0] if non_empty else ''
+
+    # Detect outer-quoted format: every row is "col1,col2,...,colN"
+    if first.startswith('"') and first.endswith('"') and '\t' not in first:
+        non_empty = [l.strip('"') for l in non_empty]
+
+    sep = '\t' if '\t' in non_empty[0] else ','
+    from io import StringIO
+    df = pd.read_csv(StringIO('\n'.join(non_empty)), delimiter=sep)
     score = df.iloc[:, 3].to_numpy().astype(np.int32)
     score[score > 3] = -100   # unscored
     score[score == 0] = 4     # artefact
@@ -161,22 +172,12 @@ def _load_tsv_score(tsv_path):
     return score
 
 
-def _resample_to_fs(sig, src_fs):
-    """Resample 1-D signal from src_fs to FS using polyphase filtering."""
-    src_fs = int(round(src_fs))
-    if src_fs == FS:
-        return sig
-    print(f"  resample: {src_fs} → {FS} Hz ...")
-    g = gcd(src_fs, FS)
-    return resample_poly(sig, up=FS // g, down=src_fs // g)
-
-
 def _process_edf(edf_path):
     """Read EDF → return (EEG_STFT, EMG_STFT) via data_process_tensor()."""
-    f = None
+    mne.set_log_level('ERROR')
     for attempt in range(3):
         try:
-            f = pyedflib.EdfReader(edf_path)
+            raw = mne.io.read_raw_edf(edf_path, preload=False, verbose=False)
             break
         except Exception as e:
             if attempt < 2:
@@ -185,48 +186,43 @@ def _process_edf(edf_path):
             else:
                 raise
 
-    labels   = f.getSignalLabels()          # list of channel name strings, in EDF order
-    sfreqs   = [f.getSampleFrequency(i) for i in range(f.signals_in_file)]
-    dur_min  = f.getFileDuration() / 60
-    print(f"  loaded  : {dur_min:.1f} min  |  channels: {labels}")
+    ch_names = raw.ch_names
+    sfreq    = raw.info['sfreq']
+    dur_min  = raw.times[-1] / 60
+    print(f"  loaded  : {dur_min:.1f} min  |  sfreq: {sfreq:.0f} Hz  |  channels: {ch_names}")
 
     # Find EEG: prefer RF\d* (e.g. RF, RF3); fall back to bare F\d* (e.g. F, F3).
-    # Lookbehind/ahead keep 'F3' but block 'RF3' and 'LF3' in the fallback.
-    eeg_candidates = [i for i, l in enumerate(labels) if re.search(r'RF\d*', l, re.I)]
+    # Lookbehind/lookahead keeps 'F3' but blocks 'RF3' and 'LF3' in the fallback.
+    eeg_candidates = [n for n in ch_names if re.search(r'RF\d*', n, re.I)]
     if not eeg_candidates:
-        eeg_candidates = [i for i, l in enumerate(labels)
-                          if re.search(r'(?<![A-Za-z])F\d*(?![A-Za-z])', l, re.I)]
-    emg_candidates = [i for i, l in enumerate(labels) if re.search(r'EMG', l, re.I)]
+        eeg_candidates = [n for n in ch_names
+                          if re.search(r'(?<![A-Za-z])F\d*(?![A-Za-z])', n, re.I)]
+    emg_candidates = [n for n in ch_names if re.search(r'EMG', n, re.I)]
 
     if not eeg_candidates:
-        f.close()
-        raise ValueError(f"No EEG channel (RF/F) found in {edf_path}. Available: {labels}")
+        raise ValueError(f"No EEG channel (RF/F) found in {edf_path}. Available: {ch_names}")
     if not emg_candidates:
-        f.close()
-        raise ValueError(f"No EMG channel found in {edf_path}. Available: {labels}")
+        raise ValueError(f"No EMG channel found in {edf_path}. Available: {ch_names}")
 
-    eeg_idx = eeg_candidates[0]
-    emg_idx = emg_candidates[0]
+    eeg_name = eeg_candidates[0]
+    emg_name = emg_candidates[0]
     if len(eeg_candidates) > 1:
-        print(f"  [warn] multiple EEG candidates "
-              f"{[labels[i] for i in eeg_candidates]}; using '{labels[eeg_idx]}'")
+        print(f"  [warn] multiple EEG candidates {eeg_candidates}; using '{eeg_name}'")
     if len(emg_candidates) > 1:
-        print(f"  [warn] multiple EMG candidates "
-              f"{[labels[i] for i in emg_candidates]}; using '{labels[emg_idx]}'")
-    print(f"  channels: EEG='{labels[eeg_idx]}' @ {sfreqs[eeg_idx]:.0f} Hz  |  "
-          f"EMG='{labels[emg_idx]}' @ {sfreqs[emg_idx]:.0f} Hz")
+        print(f"  [warn] multiple EMG candidates {emg_candidates}; using '{emg_name}'")
+    print(f"  channels: EEG='{eeg_name}'  |  EMG='{emg_name}'")
 
-    # readSignal(i) returns the 1-D signal at that exact EDF index — no ordering risk
-    EEG = f.readSignal(eeg_idx)   # float64, 1-D
-    EMG = f.readSignal(emg_idx)   # float64, 1-D
-    f.close()
+    # Load only the two channels we need
+    raw.pick([eeg_name, emg_name])
+    raw.load_data(verbose=False)
 
-    EEG = _resample_to_fs(EEG, sfreqs[eeg_idx])
-    EMG = _resample_to_fs(EMG, sfreqs[emg_idx])
+    if int(round(sfreq)) != FS:
+        print(f"  resample: {sfreq:.0f} → {FS} Hz ...")
+        raw.resample(FS, verbose=False)
 
-    # data_process_tensor expects [1, n_samples]
-    EEG = EEG[np.newaxis, :]
-    EMG = EMG[np.newaxis, :]
+    # Retrieve by name — safe regardless of channel order in EDF
+    EEG = raw.get_data(picks=[eeg_name])   # [1, n_samples]  float64
+    EMG = raw.get_data(picks=[emg_name])   # [1, n_samples]  float64
 
     with torch.no_grad():
         EEG_STFT, EMG_STFT = data_process_tensor(EEG, EMG, fs=FS, device=device)

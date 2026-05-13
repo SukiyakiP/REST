@@ -25,15 +25,15 @@ n_classes = 4     # Number of sleep stages (Wake, NREM, REM, Artifact)
 WeightedLoss = True   # focal loss with hand-tuned class weights (artifact head needs gradient boost)
 Use_BatchNorm = True # Use 1D Batch Normalization (must be used in Inference as well)
 
-# Synthetic artifact injection (training split only)
-INJECT_P     = 0.05  # target post-injection artifact rate (per training window)
-WAKE_SHARE   = 0.8   # fraction of injected epochs placed on Wake (rest on NREM/REM)
+# Synthetic artifact injection (training split only) — set INJECT_P > 0 to enable
+INJECT_P     = 0.0   # disabled: training on real artifacts only
+WAKE_SHARE   = 0.8
 INJECT_SEED  = 0
 device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 
 # Data and model paths
-DATA_DIR   = r"D:\Training data V2.0_tensor"
-Model_path = r"M:\Alex\Python\REST V1.5\model_artifact_inject_v5.pth"
+DATA_DIR   = r"D:\Training data Extended"
+Model_path = r"M:\Alex\Python\REST\model_extended_dataset.pth"
 
 model = REST(
     in_feat=f_bin,
