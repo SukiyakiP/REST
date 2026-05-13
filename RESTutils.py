@@ -378,33 +378,28 @@ def get_oversampled_indices(Y, rem_label=2, repeat_factor=3):
 
 
 class FocalLoss(nn.Module):
-    def __init__(self, alpha=None, gamma=2, reduction='mean', ignore_index=-100):
-        """
-        alpha: class weights (Tensor of shape [n_classes] or None)
-        gamma: focusing parameter
-        reduction: 'mean', 'sum', or 'none'
-        ignore_index: label to ignore in loss computation
-        """
+    def __init__(self, alpha=None, gamma=2, reduction='mean', ignore_index=-100, label_smoothing=0.0):
         super(FocalLoss, self).__init__()
         self.alpha = alpha
         self.gamma = gamma
         self.reduction = reduction
         self.ignore_index = ignore_index
+        self.label_smoothing = label_smoothing
 
     def forward(self, inputs, targets):
         """
         inputs: [B, C] logits
         targets: [B] integer labels
         """
-        # Mask out ignored targets
         valid_mask = targets != self.ignore_index
         inputs = inputs[valid_mask]
         targets = targets[valid_mask]
         if targets.numel() == 0:
             return torch.tensor(0.0, device=inputs.device, requires_grad=True)
 
-        ce_loss = F.cross_entropy(inputs, targets, weight=self.alpha, reduction='none')
-        pt = torch.exp(-ce_loss)  # pt = probability of the true class
+        ce_loss = F.cross_entropy(inputs, targets, weight=self.alpha,
+                                  reduction='none', label_smoothing=self.label_smoothing)
+        pt = torch.exp(-ce_loss)
         focal_loss = (1 - pt) ** self.gamma * ce_loss
 
         if self.reduction == 'mean':
@@ -412,7 +407,7 @@ class FocalLoss(nn.Module):
         elif self.reduction == 'sum':
             return focal_loss.sum()
         else:
-            return focal_loss  # shape: [N]
+            return focal_loss
         
 def find_data_start(file_path, sep='\t', expected_columns=None):
     with open(file_path, 'r') as file:
