@@ -19,7 +19,7 @@ from RESTutils import compute_powers,data_process,data_process_tensor,smooth_lab
 # Parameters
 HMM_smoothing = True # Enable/Disable Viterbi/HMM smoothing
 Skip_processed = False # Skip files that already have a scoring file generated
-Use_BatchNorm = True # Use 1D Batch Normalization inside the Neural Network (WARNING: Must match the toggle used during Training.py!)
+Use_LayerNorm = True  # input LayerNorm (must match Training.py)
 fs = 512  # Sampling frequency
 epoch_length = 4  # Epoch length in seconds
 window_size = 90 # Number of epochs in a sequence
@@ -44,7 +44,7 @@ model = REST(
     fc_hidden1=128,
     fc_hidden2=64,
     dropout=0.1,
-    use_batchnorm=Use_BatchNorm
+    use_layernorm=Use_LayerNorm
 ).to(device)
 model.load_state_dict(torch.load(Model_path))  # Load the trained weights
 model.to(device)  # Move the model to the GPU

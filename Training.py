@@ -23,7 +23,7 @@ f_bin = 130       # Feature bins per frame (65 EEG + 65 EMG)
 frames = 5        # STFT time frames per epoch
 n_classes = 4     # Number of sleep stages (Wake, NREM, REM, Artifact)
 WeightedLoss = True   # focal loss with hand-tuned class weights (artifact head needs gradient boost)
-Use_BatchNorm = True # Use 1D Batch Normalization (must be used in Inference as well)
+Use_LayerNorm = True  # input LayerNorm (must match Inference.py)
 
 # Synthetic artifact injection (training split only) — set INJECT_P > 0 to enable
 INJECT_P     = 0.0   # disabled: training on real artifacts only
@@ -47,7 +47,7 @@ model = REST(
     fc_hidden1=128,
     fc_hidden2=64,
     dropout=0.1,
-    use_batchnorm=Use_BatchNorm
+    use_layernorm=Use_LayerNorm
 ).to(device)
 
 # %%

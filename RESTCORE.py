@@ -27,12 +27,12 @@ class AttnPool(nn.Module):
 class REST(nn.Module):
     def __init__(self, in_feat, n_classes, win_len,
                  d_model=256, nhead=8, nlayers_epoch=4, nlayers_seq=4,
-                 ff=512, fc_hidden1=128,fc_hidden2=64, dropout=0.1, use_batchnorm=False):
+                 ff=512, fc_hidden1=128,fc_hidden2=64, dropout=0.1, use_layernorm=True):
         super().__init__()
-        
-        self.use_batchnorm = use_batchnorm
-        if self.use_batchnorm:
-            self.input_norm = nn.BatchNorm1d(in_feat)
+
+        self.use_layernorm = use_layernorm
+        if self.use_layernorm:
+            self.input_norm = nn.LayerNorm(in_feat)
 
         # Epoch-level encoding
         self.epoch_in_proj = nn.Linear(in_feat, d_model)
@@ -63,12 +63,8 @@ class REST(nn.Module):
         # Flatten batch and window
         x = x.view(B * W, F, C)
         
-        # Apply 1D Batch Normalization across the feature dimension (C)
-        if self.use_batchnorm:
-            # BatchNorm1d expects [Batch, Features, SequenceLength]
-            x = x.transpose(1, 2)
-            x = self.input_norm(x)
-            x = x.transpose(1, 2)
+        if self.use_layernorm:
+            x = self.input_norm(x)   # [B*W, F, C] — LayerNorm over last dim (C)
 
         # Epoch-level transformer
         x = self.epoch_in_proj(x)
