@@ -1,5 +1,6 @@
 # %%
 import os
+import json
 import math
 import numpy as np
 import torch
@@ -37,22 +38,25 @@ WAKE_SHARE  = 0.8
 INJECT_SEED = 0
 device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 
-# Data and model paths
-DATA_DIR   = r"D:\Training data Extended"
-Model_path = r"M:\Alex\Python\REST\model_Updated.pth"
+# ── Checkpoint ────────────────────────────────────────────────────────────────
+# Set RUN_NAME before each training run. A folder with this name will be created
+# under CHECKPOINT_BASE containing best_acc.pth, best_artf1.pth, latest.pth, config.json.
+RUN_NAME       = "Deeper_and_wider"
+CHECKPOINT_BASE = r"M:\Alex\Python\REST\checkpoints"
+DATA_DIR        = r"D:\Training data Extended"
 
 model = REST(
     in_feat=f_bin,
     n_classes=n_classes,
     win_len=window_size,
-    d_model=256,
+    d_model=384,
     nhead=8,
     nlayers_epoch=4,
-    nlayers_seq=4,
-    ff=512,
-    fc_hidden1=128,
-    fc_hidden2=64,
-    dropout=0.1,
+    nlayers_seq=6,
+    ff=768,
+    fc_hidden1=256,
+    fc_hidden2=128,
+    dropout=0.15,
     use_layernorm=Use_LayerNorm
 ).to(device)
 
@@ -61,6 +65,14 @@ model = REST(
 # spawned worker processes don't re-execute the training loop on Windows.
 if __name__ == '__main__':
     freeze_support()
+
+    CHECKPOINT_DIR = os.path.join(CHECKPOINT_BASE, RUN_NAME)
+    os.makedirs(CHECKPOINT_DIR, exist_ok=True)
+    BEST_ACC_PATH   = os.path.join(CHECKPOINT_DIR, 'best_acc.pth')
+    BEST_ARTF1_PATH = os.path.join(CHECKPOINT_DIR, 'best_artf1.pth')
+    LATEST_PATH     = os.path.join(CHECKPOINT_DIR, 'latest.pth')
+    CONFIG_PATH     = os.path.join(CHECKPOINT_DIR, 'config.json')
+    print(f"[Checkpoint] {CHECKPOINT_DIR}")
 
     # ── Datasets ──────────────────────────────────────────────────────────────
     train_ds = SleepDataset(
@@ -142,16 +154,54 @@ if __name__ == '__main__':
     use_amp = device.type == 'cuda'
     scaler  = torch.amp.GradScaler('cuda', enabled=use_amp)
 
+    # ── Config JSON ───────────────────────────────────────────────────────────
+    RUN_CONFIG = {
+        'run_name': RUN_NAME,
+        # Architecture
+        'd_model':               384,
+        'nhead':                 8,
+        'nlayers_epoch':         4,
+        'nlayers_seq':           6,
+        'ff':                    768,
+        'fc_hidden1':            256,
+        'fc_hidden2':            128,
+        'dropout':               0.15,
+        'input_layernorm':       Use_LayerNorm,
+        # Input features
+        'feat_bins_total':       130,
+        'feat_bins_breakdown':   '65 EEG + 65 EMG (single EEG channel)',
+        'stft_frames_per_epoch': 5,
+        'epoch_seconds':         4,
+        'sample_rate_hz':        512,
+        # Data
+        'data_dir':              DATA_DIR,
+        'window_epochs':         90,
+        'step_epochs':           60,
+        'val_split':             0.2,
+        'rem_repeat':            2,
+        'inject_p':              INJECT_P,
+        # Training
+        'batch_size':            batch_size,
+        'n_epochs':              n_epochs,
+        'peak_lr':               1e-4,
+        'weight_decay':          3e-3,
+        'warmup_epochs':         WARMUP_EPOCHS,
+        'grad_clip':             GRAD_CLIP,
+        'label_smoothing':       LABEL_SMOOTHING,
+        'loss': 'FocalLoss(gamma=1.0, weights=[0.6,1.0,2.0,2.0])' if WeightedLoss else 'CrossEntropyLoss',
+    }
+    with open(CONFIG_PATH, 'w') as _f:
+        json.dump(RUN_CONFIG, _f, indent=2)
+    print(f"[Config] saved to {CONFIG_PATH}\n")
+
     # ── Resume ────────────────────────────────────────────────────────────────
-    LATEST_PATH = Model_path.replace('.pth', '_latest.pth')
-    ARTF1_PATH  = Model_path.replace('.pth', '_artf1.pth')
     best_val_accuracy = 0.0
     best_art_f1       = 0.0
     patientce         = 0
     start_epoch       = 0
 
     if os.path.exists(LATEST_PATH):
-        print(f"[Resume] Loading full checkpoint from {LATEST_PATH}")
+        print(f"[Resume] Loading checkpoint from {LATEST_PATH}")
         ckpt = torch.load(LATEST_PATH, weights_only=False, map_location=device)
         model.load_state_dict(ckpt['model'])
         optimizer.load_state_dict(ckpt['optimizer'])
@@ -166,9 +216,9 @@ if __name__ == '__main__':
         print(f"[Resume] epoch {start_epoch+1}/{n_epochs}, "
               f"best_val_acc={best_val_accuracy:.2f}%, best_art_f1={best_art_f1:.3f}, "
               f"patience={patientce}")
-    elif os.path.exists(Model_path):
-        print(f"[Resume] Warm-starting weights from {Model_path} (optimizer/scheduler reset)")
-        model.load_state_dict(torch.load(Model_path, weights_only=True, map_location=device))
+    elif os.path.exists(BEST_ACC_PATH):
+        print(f"[Resume] Warm-starting weights from {BEST_ACC_PATH} (optimizer/scheduler reset)")
+        model.load_state_dict(torch.load(BEST_ACC_PATH, weights_only=True, map_location=device))
 
     # ── Training loop ─────────────────────────────────────────────────────────
     for epoch in range(start_epoch, n_epochs):
@@ -177,7 +227,7 @@ if __name__ == '__main__':
         train_loss = 0.0
         for batch_X, batch_Y in tqdm(train_loader,
                                       desc=f"Epoch {epoch+1}/{n_epochs} [lr={current_lr:.2e}]",
-                                      mininterval=30, file=__import__('sys').stderr):
+                                      ):
             batch_X = batch_X.to(device, non_blocking=True)
             batch_Y = batch_Y.to(device, non_blocking=True)
             optimizer.zero_grad()
@@ -204,7 +254,7 @@ if __name__ == '__main__':
         with torch.no_grad():
             for batch_X, batch_Y in tqdm(val_loader,
                                           desc=f"Epoch {epoch+1}/{n_epochs} - Validation",
-                                          mininterval=30, file=__import__('sys').stderr):
+                                          ):
                 batch_X = batch_X.to(device, non_blocking=True)
                 batch_Y = batch_Y.to(device, non_blocking=True)
                 with torch.autocast(device_type=device.type, dtype=torch.float16, enabled=use_amp):
@@ -239,7 +289,7 @@ if __name__ == '__main__':
 
         if val_accuracy > best_val_accuracy:
             best_val_accuracy = val_accuracy
-            torch.save(model.state_dict(), Model_path)
+            torch.save(model.state_dict(), BEST_ACC_PATH)
             print(f"New best val_acc model saved: {best_val_accuracy:.2f}%")
             patientce = 0
         else:
@@ -250,7 +300,7 @@ if __name__ == '__main__':
 
         if art_f1 > best_art_f1:
             best_art_f1 = art_f1
-            torch.save(model.state_dict(), ARTF1_PATH)
+            torch.save(model.state_dict(), BEST_ARTF1_PATH)
             print(f"New best art_F1 model saved: {best_art_f1:.3f} (P={art_p:.3f} R={art_r:.3f})")
 
         torch.save({
@@ -267,7 +317,7 @@ if __name__ == '__main__':
     print(f"Training complete. Best validation accuracy: {best_val_accuracy:.2f}%")
 
     # ── Final evaluation ──────────────────────────────────────────────────────
-    model.load_state_dict(torch.load(Model_path, weights_only=True))
+    model.load_state_dict(torch.load(BEST_ACC_PATH, weights_only=True, map_location=device))
     model.eval()
 
     all_preds   = []

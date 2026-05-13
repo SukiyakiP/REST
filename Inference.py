@@ -31,22 +31,31 @@ device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 print(device)
 
 # %%
-Model_path=r"M:\Alex\Python\REST V1.5\model_artifact.pth"  # 4-class with Artifact head (no-inject baseline)
+CHECKPOINT_DIR = r"M:\Alex\Python\REST\checkpoints\moderate_v1_realart"
+WEIGHT_FILE    = "best_acc.pth"   # or "best_artf1.pth"
+
+import json as _json
+_config_path = os.path.join(CHECKPOINT_DIR, 'config.json')
+if os.path.exists(_config_path):
+    with open(_config_path) as _f:
+        print(f"[Model] config: {_json.load(_f)}")
+
 model = REST(
     in_feat=f_bin,
     n_classes=n_classes,
     win_len=window_size,
-    d_model=256,
+    d_model=384,
     nhead=8,
     nlayers_epoch=4,
-    nlayers_seq=4,
-    ff=512,
-    fc_hidden1=128,
-    fc_hidden2=64,
-    dropout=0.1,
+    nlayers_seq=6,
+    ff=768,
+    fc_hidden1=256,
+    fc_hidden2=128,
+    dropout=0.15,
     use_layernorm=Use_LayerNorm
 ).to(device)
-model.load_state_dict(torch.load(Model_path))  # Load the trained weights
+model.load_state_dict(torch.load(os.path.join(CHECKPOINT_DIR, WEIGHT_FILE),
+                                 weights_only=True, map_location=device))
 model.to(device)  # Move the model to the GPU
 model.eval()  # Set the model to evaluation mode
 
