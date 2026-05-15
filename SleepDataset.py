@@ -34,7 +34,8 @@ class SleepDataset(Dataset):
     data_dir     : str   — folder with <name>.npy and <name>_score.npy files
     win_len      : int   — number of epochs per window (default 90)
     step         : int   — stride between window start positions (default 60)
-    rem_repeat   : int   — how many extra copies of REM-containing windows (default 3)
+    rem_repeat   : int   — repeat factor for REM-containing windows (default 3)
+    art_repeat   : int   — repeat factor for artifact-containing windows (default 1)
     cache_size   : int   — max simultaneous open memmap handles (default 16)
     split        : str   — 'train' or 'val'
     val_split    : float — fraction of recordings held out for validation (default 0.2)
@@ -43,7 +44,7 @@ class SleepDataset(Dataset):
     """
 
     def __init__(self, data_dir, win_len=90, step=60,
-                 rem_repeat=3, cache_size=16,
+                 rem_repeat=3, art_repeat=1, cache_size=16,
                  split='train', val_split=0.2,
                  frames=5, feat=130,
                  inject_p=0.0, wake_share=0.8, inject_seed=0):
@@ -54,6 +55,7 @@ class SleepDataset(Dataset):
         self.cache_size  = cache_size
         self.frames      = frames
         self.feat        = feat
+        self.art_repeat  = art_repeat
         self.inject_p    = float(inject_p)
         self.wake_share  = float(wake_share)
         self._inject_rng = (np.random.RandomState(inject_seed)
@@ -100,22 +102,27 @@ class SleepDataset(Dataset):
             for s in range(0, length - win_len + 1, step):
                 self._index.append((ri, s))
 
-        # ── 4. Oversample REM windows (train only) ────────────────────────────
+        # ── 4. Oversample REM and artifact windows (train only) ───────────────
         if split == 'train':
-            rem_idx    = []
-            normal_idx = []
+            rem_idx   = []
+            art_idx   = []
+            plain_idx = []
             for i, (ri, s) in enumerate(self._index):
-                labels = self._get_score(ri)[s : s + win_len]
-                if np.any(labels == 3):   # 3 = REM (stored 1-based)
+                labels  = self._get_score(ri)[s : s + win_len]
+                has_rem = np.any(labels == 3)   # stored 1-based: 3=REM
+                has_art = np.any(labels == 4)   # stored 1-based: 4=Artifact
+                if has_rem:
                     rem_idx.append(i)
-                else:
-                    normal_idx.append(i)
-            oversampled = normal_idx + rem_idx * rem_repeat
+                if has_art:
+                    art_idx.append(i)
+                if not has_rem and not has_art:
+                    plain_idx.append(i)
+            oversampled = plain_idx + rem_idx * rem_repeat + art_idx * art_repeat
             rng2 = np.random.RandomState(0)
             rng2.shuffle(oversampled)
             self._sample_ids = oversampled
-            print(f"  {len(normal_idx)} normal + {len(rem_idx)}×{rem_repeat} REM "
-                  f"= {len(oversampled)} windows")
+            print(f"  {len(plain_idx)} plain + {len(rem_idx)}×{rem_repeat} REM "
+                  f"+ {len(art_idx)}×{art_repeat} Art = {len(oversampled)} windows")
         else:
             self._sample_ids = list(range(len(self._index)))
             print(f"  {len(self._sample_ids)} windows (no oversampling)")

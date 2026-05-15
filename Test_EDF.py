@@ -25,23 +25,24 @@ from tqdm import tqdm
 from sklearn.metrics import accuracy_score, cohen_kappa_score, classification_report, confusion_matrix
 
 from RESTCORE import REST
-from RESTutils import compute_powers_welch_tensor, data_process_tensor, create_sequences, viterbi_smooth, find_data_start
+from RESTutils import data_process_tensor, create_sequences, viterbi_smooth, find_data_start
 
 # =============================================================================
 # MODEL CONFIGURATION - CHANGE THIS TO TEST DIFFERENT WEIGHTS
 # =============================================================================
-MODEL_PATH = r"M:\Alex\Python\REST V1.5\model_artifact.pth"
+MODEL_PATH = r"M:\Alex\Python\REST\checkpoints\20260514_1309_w120_artrepeat2\best_artf1.pth"
 
 # =============================================================================
 # Parameters (should match training configuration)
 # =============================================================================
 HMM_smoothing = True
-Use_BatchNorm = True
+BOUT_FILTER   = False  # set True to remove short bouts; see BOUT_MIN_EPOCHS below
+Use_LayerNorm = True
 fs = 512
 epoch_length = 4
-window_size = 90
-step = 60
-batch_size = 256
+window_size = 120
+step = 90
+batch_size = 200
 n_classes = 4
 f_bin = 130
 device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
@@ -56,15 +57,15 @@ model = REST(
     in_feat=f_bin,
     n_classes=n_classes,
     win_len=window_size,
-    d_model=256,
+    d_model=384,
     nhead=8,
     nlayers_epoch=4,
-    nlayers_seq=4,
-    ff=512,
-    fc_hidden1=128,
-    fc_hidden2=64,
-    dropout=0.1,
-    use_batchnorm=Use_BatchNorm
+    nlayers_seq=6,
+    ff=768,
+    fc_hidden1=256,
+    fc_hidden2=128,
+    dropout=0.15,
+    use_layernorm=Use_LayerNorm
 ).to(device)
 model.load_state_dict(torch.load(MODEL_PATH, weights_only=True))
 model.to(device)
@@ -87,6 +88,26 @@ for folder_name, folder_path in edf_folder_config:
     edf_files.extend([(f, folder_name) for f in a])
 
 print(f"Found {len(edf_files)} EDF files to process")
+
+# Minimum consecutive epochs per stage before a bout is kept (4 s/epoch).
+# 1-based: 1=Wake, 2=NREM, 3=REM, 4=Artifact
+BOUT_MIN_EPOCHS = {1: 1, 2: 3, 3: 3, 4: 2}
+
+def filter_short_bouts(score, min_epochs):
+    """Reassign bouts shorter than min_epochs[stage] to the surrounding stage."""
+    out = score.copy()
+    i = 0
+    while i < len(out):
+        stage = out[i]
+        j = i
+        while j < len(out) and out[j] == stage:
+            j += 1
+        bout_len = j - i
+        if bout_len < min_epochs.get(int(stage), 1):
+            neighbor = out[i - 1] if i > 0 else (out[j] if j < len(out) else stage)
+            out[i:j] = neighbor
+        i = j
+    return out
 
 # =============================================================================
 # Score Loading Functions
@@ -172,7 +193,10 @@ def process_edf(fp_edf, model, window_size, step, batch_size, device, HMM_smooth
                 score = viterbi_smooth(probs_flat) + 1
             else:
                 score = np.argmax(probs_flat, axis=1) + 1
-            
+
+            if BOUT_FILTER:
+                score = filter_short_bouts(score, BOUT_MIN_EPOCHS)
+
             return file_name, score
             
     except Exception as e:

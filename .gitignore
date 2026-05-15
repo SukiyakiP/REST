@@ -8,3 +8,5 @@ __pycache__
 *.xlsx
 summary.md
 Old_weights
+artifact_cache
+checkpoints

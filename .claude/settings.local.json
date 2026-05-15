@@ -1,0 +1,11 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(python -)",
+      "Bash(python analyze_emg_artifacts.py)",
+      "Bash(Remove-Item \"M:\\\\Alex\\\\Python\\\\REST\\\\artifact_cache\\\\*.npz\" -Force)",
+      "Bash(Write-Host \"Cleared old cache.\")",
+      "Bash(python -c ' *)"
+    ]
+  }
+}

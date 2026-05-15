@@ -8,22 +8,28 @@ import time
 import torch.nn.functional as F
 import numpy as np
 from scipy.io import savemat
-from scipy.signal import medfilt
 from torch.utils.data import DataLoader
 from tqdm import tqdm
 from RESTCORE import REST
-from RESTutils import compute_powers,data_process,data_process_tensor,smooth_label,create_sequences,compute_powers_welch,compute_powers_welch_tensor,viterbi_smooth
+from RESTutils import data_process_tensor, create_sequences, compute_powers_welch_tensor, viterbi_smooth
+from ArtifactFilter import flag_artifacts
 
 
 # %%
 # Parameters
-HMM_smoothing = True # Enable/Disable Viterbi/HMM smoothing
-Skip_processed = False # Skip files that already have a scoring file generated
+HMM_smoothing   = True  # Enable/Disable Viterbi/HMM smoothing
+Skip_processed  = False # Skip files that already have a scoring file generated
+BOUT_FILTER     = True  # Remove biologically implausible short bouts after scoring
+ARTIFACT_FILTER = True  # Override REST artifact predictions with rule-based EEG detector (last step)
+
+# Minimum consecutive epochs per stage (4 s/epoch) — 1-based scoring
+# 1=Wake, 2=NREM, 3=REM, 4=Artifact
+BOUT_MIN_EPOCHS = {1: 1, 2: 3, 3: 3, 4: 2}
 Use_LayerNorm = True  # input LayerNorm (must match Training.py)
 fs = 512  # Sampling frequency
 epoch_length = 4  # Epoch length in seconds
-window_size = 90 # Number of epochs in a sequence
-step=60 # overlapping step size for sequences
+window_size = 120 # Number of epochs in a sequence
+step = 90         # overlapping step size for sequences
 batch_size = 256  # Batch size for training
 n_classes = 4   # Number of sleep stages (Wake, NREM, REM, Artifact)
 f_bin=130 # Frequency bin for PSD computation
@@ -80,6 +86,22 @@ score_file_header = "_REST_V1.5.mat"
 # score_file_header = "_Full_Labels.mat"
 
 # %%
+
+def filter_short_bouts(score, min_epochs):
+    """Reassign bouts shorter than min_epochs[stage] to the surrounding stage."""
+    out = score.copy()
+    i = 0
+    while i < len(out):
+        stage = out[i]
+        j = i
+        while j < len(out) and out[j] == stage:
+            j += 1
+        if (j - i) < min_epochs.get(int(stage), 1):
+            neighbor = out[i - 1] if i > 0 else (out[j] if j < len(out) else stage)
+            out[i:j] = neighbor
+        i = j
+    return out
+
 
 def process_edf(fp_edf, model, window_size, step, batch_size, device, HMM_smoothing, score_file_header, skip_processed):
     try:
@@ -146,13 +168,19 @@ def process_edf(fp_edf, model, window_size, step, batch_size, device, HMM_smooth
                 first_epoch_probs = probs[:, :step, :].cpu().numpy()
                 all_preds.append(first_epoch_probs)
 
-            # Viterbi Smoothing (Updated)
             probs_flat = np.concatenate(all_preds, axis=0).reshape(-1, n_classes)
             if HMM_smoothing:
                 score = viterbi_smooth(probs_flat) + 1
             else:
-                # Raw Argmax (1-based)
                 score = np.argmax(probs_flat, axis=1) + 1
+
+            if BOUT_FILTER:
+                score = filter_short_bouts(score, BOUT_MIN_EPOCHS)
+
+            if ARTIFACT_FILTER:
+                art_mask = flag_artifacts(EEG[0], fs=fs, epoch_seconds=epoch_length)
+                n = min(len(art_mask), len(score))
+                score[:n][art_mask[:n]] = 4
 
             savemat(save_path, {'score': score, 'power': power})
             

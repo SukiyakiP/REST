@@ -2,6 +2,7 @@
 import os
 import json
 import math
+from datetime import datetime
 import numpy as np
 import torch
 import torch.nn as nn
@@ -17,15 +18,15 @@ from SleepDataset import SleepDataset
 # %%
 # Parameters
 fs = 512          # Raw EDF sampling frequency (used during compilation only)
-epoch_length = 4  # Epoch length in seconds
-window_size = 90  # Window size for sliding window (epochs)
-step = 60         # Step size for sliding window
-batch_size = 256  # Batch size for training
+epoch_length = 4   # Epoch length in seconds
+window_size = 120  # Window size for sliding window (epochs)
+step = 60          # Step size for sliding window
+batch_size = 200  # Batch size for training
 n_epochs = 100    # Number of training epochs
 f_bin = 130       # Feature bins per frame (65 EEG + 65 EMG)
 frames = 5        # STFT time frames per epoch
 n_classes = 4     # Number of sleep stages (Wake, NREM, REM, Artifact)
-WeightedLoss    = True
+WeightedLoss    = False
 Use_LayerNorm   = True
 LABEL_SMOOTHING = 0.1
 WARMUP_EPOCHS   = 5
@@ -41,7 +42,7 @@ device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 # ── Checkpoint ────────────────────────────────────────────────────────────────
 # Set RUN_NAME before each training run. A folder with this name will be created
 # under CHECKPOINT_BASE containing best_acc.pth, best_artf1.pth, latest.pth, config.json.
-RUN_NAME       = "Deeper_and_wider"
+RUN_NAME       = "w120_artrepeat2_crossentropy"
 CHECKPOINT_BASE = r"M:\Alex\Python\REST\checkpoints"
 DATA_DIR        = r"D:\Training data Extended"
 
@@ -66,7 +67,8 @@ model = REST(
 if __name__ == '__main__':
     freeze_support()
 
-    CHECKPOINT_DIR = os.path.join(CHECKPOINT_BASE, RUN_NAME)
+    CHECKPOINT_DIR = os.path.join(CHECKPOINT_BASE,
+                                   f"{datetime.now().strftime('%Y%m%d_%H%M')}_{RUN_NAME}")
     os.makedirs(CHECKPOINT_DIR, exist_ok=True)
     BEST_ACC_PATH   = os.path.join(CHECKPOINT_DIR, 'best_acc.pth')
     BEST_ARTF1_PATH = os.path.join(CHECKPOINT_DIR, 'best_artf1.pth')
@@ -80,6 +82,7 @@ if __name__ == '__main__':
         win_len     = window_size,
         step        = step,
         rem_repeat  = 2,
+        art_repeat  = 2,
         split       = 'train',
         val_split   = 0.2,
         frames      = frames,
@@ -175,10 +178,11 @@ if __name__ == '__main__':
         'sample_rate_hz':        512,
         # Data
         'data_dir':              DATA_DIR,
-        'window_epochs':         90,
-        'step_epochs':           60,
+        'window_epochs':         120,
+        'step_epochs':           90,
         'val_split':             0.2,
         'rem_repeat':            2,
+        'art_repeat':            2,
         'inject_p':              INJECT_P,
         # Training
         'batch_size':            batch_size,

@@ -17,6 +17,7 @@ from torch.utils.data import DataLoader
 # Import REST dependencies
 from RESTCORE import REST
 from RESTutils import compute_powers_welch_tensor, data_process_tensor, create_sequences, viterbi_smooth
+from ArtifactFilter import flag_artifacts
 import sys
 import gc
 
@@ -43,13 +44,13 @@ else:
 
 FS = 512
 EPOCH_LENGTH = 4
-WINDOW_SIZE = 90
-STEP = 60
+WINDOW_SIZE = 120
+STEP = 90
 BATCH_SIZE = 128
 N_CLASSES = 4   # Wake, NREM, REM, Artifact
 F_BIN = 130
 DEVICE = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
-USE_BATCHNORM = True
+USE_LAYERNORM = True
 
 
 class RESTInferenceApp:
@@ -115,7 +116,7 @@ class RESTInferenceApp:
         # Hidden shortcut for 300dpi paper screenshots
         self.root.bind('<Control-p>', self._take_screenshot)
 
-    def _take_screenshot(self, event=None):
+    def _take_screenshot(self, _event=None):
         try:
             from PIL import ImageGrab, Image
             # Ensure window is fully updated before grabbing coordinates
@@ -165,15 +166,15 @@ class RESTInferenceApp:
                 in_feat=F_BIN,
                 n_classes=N_CLASSES,
                 win_len=WINDOW_SIZE,
-                d_model=256,
+                d_model=384,
                 nhead=8,
                 nlayers_epoch=4,
-                nlayers_seq=4,
-                ff=512,
-                fc_hidden1=128,
-                fc_hidden2=64,
-                dropout=0.1,
-                use_batchnorm=USE_BATCHNORM
+                nlayers_seq=6,
+                ff=768,
+                fc_hidden1=256,
+                fc_hidden2=128,
+                dropout=0.15,
+                use_layernorm=USE_LAYERNORM
             ).to(DEVICE)
             model.load_state_dict(torch.load(path, map_location=DEVICE))
             model.to(DEVICE)
@@ -221,7 +222,11 @@ class RESTInferenceApp:
         ttk.Label(channel_frame, text="HMM Smoothing:").grid(row=1, column=2, padx=5, pady=5, sticky=tk.E)
         self.hmm_var = tk.BooleanVar(value=True)
         ttk.Checkbutton(channel_frame, text="Enable", variable=self.hmm_var).grid(row=1, column=3, padx=5, pady=5, sticky=tk.W)
-        
+
+        ttk.Label(channel_frame, text="Artifact Filter:").grid(row=2, column=2, padx=5, pady=5, sticky=tk.E)
+        self.artifact_filter_var = tk.BooleanVar(value=True)
+        ttk.Checkbutton(channel_frame, text="Enable (rule-based EEG, last step)", variable=self.artifact_filter_var).grid(row=2, column=3, padx=5, pady=5, sticky=tk.W)
+
         # Actions
         action_frame = ttk.Frame(self.tab_single)
         action_frame.pack(fill=tk.X, pady=10)
@@ -289,9 +294,9 @@ class RESTInferenceApp:
         self.progress_var.set(0)
         self.status_var.set("Scoring in progress...")
         
-        threading.Thread(target=self._run_single_inference, args=(filepath, ch_eeg1, ch_emg, self.hmm_var.get()), daemon=True).start()
+        threading.Thread(target=self._run_single_inference, args=(filepath, ch_eeg1, ch_emg, self.hmm_var.get(), self.artifact_filter_var.get()), daemon=True).start()
         
-    def _run_single_inference(self, filepath, ch_eeg1, ch_emg, use_hmm):
+    def _run_single_inference(self, filepath, ch_eeg1, ch_emg, use_hmm, use_artifact_filter):
         try:
             self.root.after(0, lambda: self.progress_var.set(10))
             raw = mne.io.read_raw_edf(filepath, preload=True)
@@ -335,10 +340,15 @@ class RESTInferenceApp:
                 score = viterbi_smooth(probs_flat) + 1
             else:
                 score = np.argmax(probs_flat, axis=1) + 1
-                
+
+            if use_artifact_filter:
+                art_mask = flag_artifacts(eeg_data, fs=FS, epoch_seconds=EPOCH_LENGTH)
+                n = min(len(art_mask), len(score))
+                score[:n][art_mask[:n]] = 4
+
             self.current_score = score
             self.current_power = power
-            
+
             self.root.after(0, self._single_inference_success, filepath)
             
         except Exception as e:
@@ -437,7 +447,11 @@ class RESTInferenceApp:
         ttk.Label(keyword_frame, text="HMM Smoothing:").grid(row=1, column=2, padx=5, pady=5, sticky=tk.E)
         self.batch_hmm_var = tk.BooleanVar(value=True)
         ttk.Checkbutton(keyword_frame, text="Enable", variable=self.batch_hmm_var).grid(row=1, column=3, padx=5, pady=5, sticky=tk.W)
-        
+
+        ttk.Label(keyword_frame, text="Artifact Filter:").grid(row=2, column=2, padx=5, pady=5, sticky=tk.E)
+        self.batch_artifact_filter_var = tk.BooleanVar(value=True)
+        ttk.Checkbutton(keyword_frame, text="Enable (rule-based EEG, last step)", variable=self.batch_artifact_filter_var).grid(row=2, column=3, padx=5, pady=5, sticky=tk.W)
+
         # Action
         action_frame = ttk.Frame(self.tab_batch)
         action_frame.pack(fill=tk.X, pady=20)
@@ -486,9 +500,9 @@ class RESTInferenceApp:
         self.log_box.delete(1.0, tk.END)
         self.log_box.config(state=tk.DISABLED)
         
-        threading.Thread(target=self._run_batch_inference, args=(folder, k_eeg1, k_emg, self.batch_hmm_var.get()), daemon=True).start()
+        threading.Thread(target=self._run_batch_inference, args=(folder, k_eeg1, k_emg, self.batch_hmm_var.get(), self.batch_artifact_filter_var.get()), daemon=True).start()
         
-    def _run_batch_inference(self, folder, k_eeg1, k_emg, use_hmm):
+    def _run_batch_inference(self, folder, k_eeg1, k_emg, use_hmm, use_artifact_filter):
         edf_files = glob.glob(os.path.join(folder, "**", "*.edf"), recursive=True)
         if not edf_files:
             self.root.after(0, self._log_batch, "No EDF files found in the directory.")
@@ -547,7 +561,12 @@ class RESTInferenceApp:
                     score = viterbi_smooth(probs_flat) + 1
                 else:
                     score = np.argmax(probs_flat, axis=1) + 1
-                    
+
+                if use_artifact_filter:
+                    art_mask = flag_artifacts(eeg_data, fs=FS, epoch_seconds=EPOCH_LENGTH)
+                    n = min(len(art_mask), len(score))
+                    score[:n][art_mask[:n]] = 4
+
                 # Save
                 file_name = os.path.splitext(os.path.basename(fp_edf))[0]
                 save_folder = os.path.dirname(fp_edf)
