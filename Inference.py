@@ -37,7 +37,7 @@ device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 print(device)
 
 # %%
-CHECKPOINT_DIR = r"M:\Alex\Python\REST\checkpoints\moderate_v1_realart"
+CHECKPOINT_DIR = r"M:\Alex\Python\REST\checkpoints\20260514_1309_w120_artrepeat2"
 WEIGHT_FILE    = "best_acc.pth"   # or "best_artf1.pth"
 
 import json as _json

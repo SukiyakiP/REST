@@ -27,10 +27,10 @@ Algorithm (empirically validated against 5 mouse datasets, 690k epochs):
      - Helps C57SA where EEG amplitude alone barely separates artifacts from Wake.
      - Only active when EMG_1d is provided to flag_artifacts / compute_features.
 
-Performance summary (5 datasets, default parameters, EEG-only):
-  ALL F1=0.270  R=0.183  P=0.512  W-flag=0.05%
-  CD1 F1=0.810  CD1 is highly separable (very extreme PTP amplitudes).
-  C57SA F1≈0.02 — artifacts there are near-normal EEG amplitude; EMG rule helps.
+Performance summary (5 held-out test datasets, tuned parameters, EEG-only):
+  ALL F1=0.275  CD1 F1=0.878  DBAKA F1=0.610  DBASA F1=0.522
+  C57KA F1=0.088  C57SA F1=0.017 (artifacts overlap with Wake in amplitude)
+  Parameters tuned on ~460 training recordings via tune_artifact_filter.py.
 
 Usage
 -----
@@ -52,6 +52,7 @@ to this module (written by tune_artifact_filter.py after tuning).
 
 import json
 import os
+import sys
 import numpy as np
 from scipy.ndimage import uniform_filter1d
 
@@ -59,22 +60,27 @@ from scipy.ndimage import uniform_filter1d
 # Parameters
 # ---------------------------------------------------------------------------
 
-_PARAMS_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)),
-                             "artifact_params.json")
+def _find_params_file():
+    if getattr(sys, 'frozen', False):
+        # Frozen exe: prefer a file next to the .exe (user-editable),
+        # fall back to the bundled copy inside sys._MEIPASS.
+        beside_exe = os.path.join(os.path.dirname(sys.executable), "artifact_params.json")
+        if os.path.exists(beside_exe):
+            return beside_exe
+        return os.path.join(sys._MEIPASS, "artifact_params.json")
+    return os.path.join(os.path.dirname(os.path.abspath(__file__)), "artifact_params.json")
+
+_PARAMS_FILE = _find_params_file()
 
 DEFAULT_PARAMS = {
     # Primary rule: temporal smooth of within-recording PTP percentile score
-    "ptp_percentile":  99.0,  # reference percentile within each recording
-    "smooth_window":    5,    # epoch window for temporal convolution (5 × 4s = 20s)
-    "score_threshold":  0.4,  # smoothed score threshold to flag (tuned on 5 datasets)
+    # Tuned on ~460 training recordings via tune_artifact_filter.py.
+    "ptp_percentile":  97.0,  # reference percentile within each recording
+    "smooth_window":    7,    # epoch window for temporal convolution (7 × 4s = 28s)
+    "score_threshold":  0.6,  # smoothed score threshold to flag
 
     # Secondary rule: saturation (high precision, catches obvious clipping)
     "saturation_threshold": 0.10,  # fraction of samples at ≥99% of recording abs-max
-
-    # Tertiary rule: EMG elevation (optional — only used when EMG is provided)
-    # Within-recording EMG RMS percentile threshold. Epochs with EMG RMS at or above
-    # this percentile of the recording are flagged. Only OR'd in when emg_rms is present.
-    "emg_percentile": 99.5,  # within-recording EMG percentile threshold
 }
 
 

@@ -9,4 +9,5 @@ __pycache__
 summary.md
 Old_weights
 artifact_cache
+artifact_cache_train
 checkpoints

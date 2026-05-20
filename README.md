@@ -1,6 +1,8 @@
 # REST — Rodent EEG Sleep-stage Transformer
 
-Automated sleep-stage scoring for rodent EEG/EMG recordings. Classifies every 4-second epoch into **Wake**, **NREM**, or **REM** and saves results as a MATLAB-compatible `.mat` file.
+Automated sleep-stage scoring for rodent EEG/EMG recordings. Classifies every 4-second epoch into **Wake**, **NREM**, **REM**, or **Artifact** and saves results as a MATLAB-compatible `.mat` file.
+
+Artifact detection uses a **two-layer approach**: the REST transformer flags artifacts as part of normal classification, and a second rule-based EEG signal-quality filter runs as a final override pass. See [Artifact Detection](#artifact-detection) for details.
 
 ---
 
@@ -48,7 +50,7 @@ Wait for **Model Status: Loaded ✅** before doing anything else.
 
 1. Click **Browse** and select your `.edf` file.
 2. Choose your **EEG** and **EMG** channels from the dropdowns.
-3. Leave **HMM Smoothing** enabled (recommended).
+3. Leave **HMM Smoothing** and **Artifact Filter** enabled (both recommended).
 4. Click **Score** and wait for the progress bar to finish.
 5. A hypnogram will appear. Click **Save Results** to export the `.mat` file.
 
@@ -75,7 +77,7 @@ Each `.mat` file contains two variables:
 
 | Variable | Description |
 |---|---|
-| `score` | Sleep stage per epoch — **1 = Wake, 2 = NREM, 3 = REM** |
+| `score` | Sleep stage per epoch — **1 = Wake, 2 = NREM, 3 = REM, 4 = Artifact** |
 | `power` | Spectral band powers per epoch (Delta, Theta, Alpha, Beta, Sigma, Gamma, Full EEG, EMG) |
 
 Load in MATLAB:
@@ -92,6 +94,47 @@ data  = loadmat('MyRecording_REST_V1.5.mat')
 score = data['score'].flatten()
 power = data['power']
 ```
+
+---
+
+## Artifact Detection
+
+REST uses two independent layers for artifact detection. Both must agree an epoch is clean for it to retain its sleep-stage label.
+
+### Layer 1 — Transformer model
+
+The REST model is trained on 4-class output (Wake / NREM / REM / Artifact). It learns temporal patterns across a 120-epoch (8-minute) context window and can identify artifacts based on their relationship to surrounding epochs. Because real artifact labels are rare in training data, the model is conservative — it captures artifacts that have clear spectral signatures within their broader context.
+
+### Layer 2 — Rule-based EEG signal-quality filter
+
+A signal-processing filter (`ArtifactFilter.py`) runs after the model as a final override step. It works on the raw EEG channel only and applies two rules:
+
+**Smooth-PTP rule (primary):** Computes the peak-to-peak amplitude of each epoch and ranks it against all other epochs in the same recording (within-recording percentile). Epochs that are substantially above the recording's own baseline, and whose elevation is sustained over a ~20-second window, are flagged. The within-recording normalization is essential — mouse strains differ by ~2× in baseline EEG amplitude, so a global threshold would not generalise across cohorts. The temporal smoothing distinguishes sustained artifact bursts from isolated high-amplitude arousal peaks during Wake.
+
+**Saturation rule (secondary):** Flags epochs where more than 10% of samples are clipped at the ADC rail. Catches hard-clipping events that the Smooth-PTP rule can miss (the waveform is stuck at a ceiling rather than swinging through a large range).
+
+Any epoch flagged by either rule is overridden to **Artifact (4)** regardless of the model's prediction.
+
+### Performance (rule-based layer, EEG only)
+
+Evaluated on 5 held-out test datasets (parameters tuned on ~460 separate training recordings):
+
+| Dataset | F1 | Notes |
+|---|---|---|
+| CD1 | 0.88 | Primary use case — artifacts are highly separable by amplitude |
+| DBAKA | 0.61 | Good separation |
+| DBASA | 0.52 | Moderate separation |
+| C57KA | 0.09 | Artifacts close to active-Wake amplitude |
+| C57SA | 0.02 | Known limitation — artifacts overlap with Wake in EEG; model layer carries this |
+
+The rule-based layer adds the most value for CD1 recordings, where artifact PTP is typically 10–50× the normal signal. C57 saline recordings are the known limitation and rely primarily on Layer 1.
+
+### Toggling
+
+- **`Inference.py`:** `ARTIFACT_FILTER = True / False`
+- **`Inference_GUI.py`:** "Artifact Filter" checkbox in both Single File and Batch mode
+
+Parameters are stored in `artifact_params.json`. See `filter_function_note.md` for a full explanation of the algorithm and tuning procedure.
 
 ---
 
@@ -153,6 +196,7 @@ edf_folder        = [r"M:\EEG files\2026\Cohort15\sham",
                      r"M:\EEG files\2026\Cohort15\TBI"]
 Skip_processed    = False   # set True to skip files already scored
 HMM_smoothing     = True    # recommended
+ARTIFACT_FILTER   = True    # rule-based EEG override pass (Layer 2); recommended
 ```
 
 **Run:**

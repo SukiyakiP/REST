@@ -38,29 +38,31 @@ The key observation is that artifact events are not isolated — electrode pops,
 The algorithm converts the PTP into a soft score:
 
 ```
-ref   = percentile(ptp_raw, 99)
+ref   = percentile(ptp_raw, 97)
 soft  = clip((ptp_raw - ref) / ref, 0, 2)
-score = uniform_filter1d(soft, size=5)        # 5 epochs × 4 s = 20 s window
+score = uniform_filter1d(soft, size=7)        # 7 epochs × 4 s = 28 s window
 ```
 
-The uniform filter (box convolution) averages the soft score over a 20-second window. An isolated spike gets diluted by its neighbors and falls below threshold. A genuine artifact burst that spans several epochs sustains a high score and crosses the threshold.
+The uniform filter (box convolution) averages the soft score over a 28-second window. An isolated spike gets diluted by its neighbors and falls below threshold. A genuine artifact burst that spans several epochs sustains a high score and crosses the threshold.
 
-The threshold (0.4) was tuned on five labeled datasets totaling ~690,000 epochs.
+The threshold (0.6) was tuned on ~460 training recordings (not the test datasets) via `tune_artifact_filter.py`.
 
-### Performance by dataset (EEG-only)
+### Performance by dataset (EEG-only, held-out evaluation)
+
+Parameters tuned on ~460 training recordings; these 5 datasets were never used during tuning.
 
 | Dataset | F1    | Recall | Precision | Wake false-flag |
 |---------|-------|--------|-----------|-----------------|
-| CD1     | 0.838 | 0.913  | 0.774     | 0.06%           |
+| CD1     | 0.878 | 0.897  | 0.859     | 0.03%           |
 | DBAKA   | 0.610 | 0.833  | 0.481     | 0.02%           |
-| DBASA   | 0.377 | 0.464  | 0.317     | 0.05%           |
-| C57KA   | 0.106 | 0.076  | 0.176     | 0.03%           |
-| C57SA   | 0.031 | 0.016  | 0.429     | 0.02%           |
-| **ALL** | **0.276** | 0.179 | 0.599 | **0.03%**   |
+| DBASA   | 0.522 | 0.429  | 0.667     | 0.01%           |
+| C57KA   | 0.088 | 0.051  | 0.333     | 0.01%           |
+| C57SA   | 0.017 | 0.008  | 0.571     | 0.00%           |
+| **ALL** | **0.275** | 0.169 | 0.743 | **0.02%**   |
 
-CD1 is the primary use case and achieves F1=0.838 — excellent for a parameter-free rule.
+CD1 is the primary use case and achieves F1=0.878 — excellent for a parameter-free rule.
 
-C57SA is the known hard case. Those artifacts sit at only the 95–97th percentile of their recording's PTP distribution, which is indistinguishable from high-amplitude active Wake. No EEG amplitude rule can separate them without also generating massive false positives on Wake. The ML model is the right tool for C57SA.
+C57SA is the known hard case. Those artifacts sit at the 95–97th percentile of their recording's PTP distribution, which is indistinguishable from high-amplitude active Wake. No EEG amplitude rule can separate them without also generating massive false positives on Wake. The ML model is the right tool for C57SA.
 
 ---
 
@@ -81,11 +83,11 @@ If more than 10% of samples in an epoch touch the rail, it is flagged. This rule
 
 Stored in `artifact_params.json` (loaded automatically at inference time):
 
-| Parameter | Default | Effect |
-|-----------|---------|--------|
-| `ptp_percentile` | 99.0 | Within-recording PTP reference level. Higher = only the most extreme epochs qualify. |
-| `smooth_window` | 5 | Temporal averaging window in epochs (5 × 4 s = 20 s). Larger = requires longer-duration artifact bursts. |
-| `score_threshold` | 0.4 | Minimum smoothed score to flag. Higher = more conservative (fewer flags). |
+| Parameter | Value | Effect |
+|-----------|-------|--------|
+| `ptp_percentile` | 97.0 | Within-recording PTP reference level. Higher = only the most extreme epochs qualify. |
+| `smooth_window` | 7 | Temporal averaging window in epochs (7 × 4 s = 28 s). Larger = requires longer-duration artifact bursts. |
+| `score_threshold` | 0.6 | Minimum smoothed score to flag. Higher = more conservative (fewer flags). |
 | `saturation_threshold` | 0.10 | Fraction of samples at ADC rail to flag. |
 
 To retune these parameters, run `tune_artifact_filter.py` against any dataset with manual labels.

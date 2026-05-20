@@ -26,17 +26,19 @@ from sklearn.metrics import accuracy_score, cohen_kappa_score, classification_re
 
 from RESTCORE import REST
 from RESTutils import data_process_tensor, create_sequences, viterbi_smooth, find_data_start
+from ArtifactFilter import flag_artifacts
 
 # =============================================================================
 # MODEL CONFIGURATION - CHANGE THIS TO TEST DIFFERENT WEIGHTS
 # =============================================================================
-MODEL_PATH = r"M:\Alex\Python\REST\checkpoints\20260514_1309_w120_artrepeat2\best_artf1.pth"
-
+# MODEL_PATH = r"M:\Alex\Python\REST\checkpoints\20260515_1002_w120_artrepeat2_crossentropy\best_acc.pth"
+MODEL_PATH = r"M:\Alex\Python\REST\checkpoints\20260514_1309_w120_artrepeat2\best_acc.pth"
 # =============================================================================
 # Parameters (should match training configuration)
 # =============================================================================
-HMM_smoothing = True
-BOUT_FILTER   = False  # set True to remove short bouts; see BOUT_MIN_EPOCHS below
+HMM_smoothing   = True
+BOUT_FILTER     = True  # set True to remove short bouts; see BOUT_MIN_EPOCHS below
+ARTIFACT_FILTER = True   # apply rule-based EEG artifact override as final step
 Use_LayerNorm = True
 fs = 512
 epoch_length = 4
@@ -197,6 +199,11 @@ def process_edf(fp_edf, model, window_size, step, batch_size, device, HMM_smooth
             if BOUT_FILTER:
                 score = filter_short_bouts(score, BOUT_MIN_EPOCHS)
 
+            if ARTIFACT_FILTER:
+                art_mask = flag_artifacts(EEG[0], fs=fs, epoch_seconds=epoch_length)
+                n = min(len(art_mask), len(score))
+                score[:n][art_mask[:n]] = 4
+
             return file_name, score
             
     except Exception as e:
@@ -210,7 +217,8 @@ print("\n" + "="*60)
 print("RAPID MODEL TESTING")
 print("="*60)
 print(f"Model: {MODEL_PATH}")
-print(f"HMM Smoothing: {HMM_smoothing}")
+print(f"HMM Smoothing:   {HMM_smoothing}")
+print(f"Artifact Filter: {ARTIFACT_FILTER}")
 print("="*60 + "\n")
 
 print("Running Inference & Evaluation...")
@@ -292,7 +300,14 @@ for dataset_name in sorted(dataset_data.keys()):
     
     acc = accuracy_score(y_true, y_pred)
     kappa = cohen_kappa_score(y_true, y_pred)
-    
+
+    report_dict = classification_report(y_true, y_pred, target_names=["Wake", "NREM", "REM", "Artifact"],
+                                        labels=[0, 1, 2, 3], zero_division=0, output_dict=True)
+    art = report_dict.get("Artifact", {})
+    art_p  = art.get("precision", 0.0)
+    art_r  = art.get("recall",    0.0)
+    art_f1 = art.get("f1-score",  0.0)
+
     print(f"\n{'='*60}")
     print(f"{dataset_name}")
     print(f"{'='*60}")
@@ -300,27 +315,33 @@ for dataset_name in sorted(dataset_data.keys()):
     print(f"  Total epochs: {len(y_true)}")
     print(f"  Accuracy: {acc:.4f} ({acc*100:.2f}%)")
     print(f"  Cohen's Kappa: {kappa:.3f}")
-    
+    print(f"  Artifact  —  P: {art_p:.3f}  R: {art_r:.3f}  F1: {art_f1:.3f}")
+
     print(f"\n  Classification Report:")
-    report = classification_report(y_true, y_pred, target_names=["Wake", "NREM", "REM", "Artifact"], labels=[0, 1, 2, 3], zero_division=0)
-    for line in report.split('\n'):
+    report_str = classification_report(y_true, y_pred, target_names=["Wake", "NREM", "REM", "Artifact"],
+                                       labels=[0, 1, 2, 3], zero_division=0)
+    for line in report_str.split('\n'):
         print(f"    {line}")
-    
+
     print(f"  Confusion Matrix:")
     cm = confusion_matrix(y_true, y_pred, labels=[0, 1, 2, 3])
-    print(f"    Wake:   {cm[0].tolist()}")
-    print(f"    NREM:   {cm[1].tolist()}")
-    print(f"    REM:    {cm[2].tolist()}")
+    print(f"    Wake:     {cm[0].tolist()}")
+    print(f"    NREM:     {cm[1].tolist()}")
+    print(f"    REM:      {cm[2].tolist()}")
     print(f"    Artifact: {cm[3].tolist()}")
-    
+
     # Store for Excel
     all_sheets_data[dataset_name] = {
         'metrics': {
-            'Dataset': dataset_name,
-            'Files': len(data['files']),
-            'Total Epochs': len(y_true),
-            'Accuracy': f"{acc:.4f}",
-            'Cohen Kappa': f"{kappa:.3f}"
+            'Dataset':        dataset_name,
+            'Files':          len(data['files']),
+            'Total Epochs':   len(y_true),
+            'Accuracy':       f"{acc:.4f}",
+            'Cohen Kappa':    f"{kappa:.3f}",
+            'Art F1':         f"{art_f1:.3f}",
+            'Art Precision':  f"{art_p:.3f}",
+            'Art Recall':     f"{art_r:.3f}",
+            'Artifact Filter': str(ARTIFACT_FILTER),
         },
         'files': data['files'],
         'y_true': y_true,
@@ -330,7 +351,8 @@ for dataset_name in sorted(dataset_data.keys()):
 # =============================================================================
 # Save Excel Report
 # =============================================================================
-excel_path = os.path.join(os.path.dirname(MODEL_PATH), f"RapidTest_{model_basename}_results.xlsx")
+af_tag = "_artfilter" if ARTIFACT_FILTER else ""
+excel_path = os.path.join(os.path.dirname(MODEL_PATH), f"RapidTest_{model_basename}{af_tag}_results.xlsx")
 
 with pd.ExcelWriter(excel_path, engine='openpyxl') as writer:
     # One sheet per dataset with full analysis

@@ -1,6 +1,6 @@
 {
-  "ptp_percentile": 99.0,
-  "smooth_window": 5,
-  "score_threshold": 0.4,
+  "ptp_percentile": 97,
+  "smooth_window": 7,
+  "score_threshold": 0.6,
   "saturation_threshold": 0.1
 }

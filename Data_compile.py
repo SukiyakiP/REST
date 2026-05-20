@@ -43,7 +43,6 @@ TRAINING_DIRS = [r"M:\Alex\Python\Mouse Sleep Data\fmr1\5mo",
                  r"M:\Alex\Python\Mouse Sleep Data\Additional_ELI",
                  r"M:\Alex\Python\Mouse Sleep Data\Additional_RM",
                  r"M:\Alex\Python\Mouse Sleep Data\Additional_TBI"
-    # r"M:\EEG files\...",
 ]
 
 FS = 512  # native EDF sampling rate
