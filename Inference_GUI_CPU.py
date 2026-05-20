@@ -300,6 +300,8 @@ class RESTInferenceApp:
         try:
             self.root.after(0, lambda: self.progress_var.set(10))
             raw = mne.io.read_raw_edf(filepath, preload=True)
+            if raw.info['sfreq'] != FS:
+                raw.resample(FS)
 
             eeg1_data = raw.get_data(picks=[ch_eeg1])[0]
             emg_data = raw.get_data(picks=[ch_emg])[0]
@@ -317,6 +319,7 @@ class RESTInferenceApp:
             eeg_stft, emg_stft = data_process_tensor(eeg_data, emg_data, fs=FS, device=DEVICE)
             STFT = np.concatenate((eeg_stft, emg_stft), axis=-1)
 
+            n_epochs = len(STFT)
             X = create_sequences(data=STFT, window_size=WINDOW_SIZE, step=STEP)
             sequences_tensor = torch.tensor(X, dtype=torch.float32).to(DEVICE)
             sequences_batch = DataLoader(sequences_tensor, batch_size=BATCH_SIZE, shuffle=False)
@@ -334,7 +337,20 @@ class RESTInferenceApp:
                     percent = 50 + int(40 * (idx / len(sequences_batch)))
                     self.root.after(0, lambda p=percent: self.progress_var.set(p))
 
-            probs_flat = np.concatenate(all_preds, axis=0).reshape(-1, N_CLASSES)
+            probs_flat = np.concatenate(all_preds, axis=0).reshape(-1, N_CLASSES) if all_preds else np.empty((0, N_CLASSES), dtype=np.float32)
+
+            # Score tail epochs dropped by create_sequences (up to STEP-1 epochs at end of recording)
+            n_scored = probs_flat.shape[0]
+            if n_scored < n_epochs:
+                tail_len = n_epochs - n_scored
+                tail_window = STFT[max(0, n_epochs - WINDOW_SIZE):n_epochs]
+                if len(tail_window) < WINDOW_SIZE:
+                    pad = np.zeros((WINDOW_SIZE - len(tail_window), STFT.shape[1]), dtype=np.float32)
+                    tail_window = np.concatenate([pad, tail_window], axis=0)
+                tail_tensor = torch.tensor(tail_window[np.newaxis], dtype=torch.float32).to(DEVICE)
+                with torch.no_grad():
+                    tail_probs = F.softmax(self.model(tail_tensor), dim=2)[0, -tail_len:, :].cpu().numpy()
+                probs_flat = np.concatenate([probs_flat, tail_probs], axis=0)
 
             if use_hmm:
                 score = viterbi_smooth(probs_flat) + 1
@@ -512,6 +528,8 @@ class RESTInferenceApp:
                 self.root.after(0, lambda f=os.path.basename(fp_edf): self.status_var.set(f"Batch Scoring: {f}"))
 
                 raw = mne.io.read_raw_edf(fp_edf, preload=True, verbose=False)
+                if raw.info['sfreq'] != FS:
+                    raw.resample(FS)
                 ch_names = raw.info['ch_names']
 
                 eeg1_candidates = [name for name in ch_names if k_eeg1 in name and 'LP' not in name]
@@ -537,6 +555,7 @@ class RESTInferenceApp:
                 eeg_stft, emg_stft = data_process_tensor(eeg_data, emg_data, fs=FS, device=DEVICE)
                 STFT = np.concatenate((eeg_stft, emg_stft), axis=-1)
 
+                n_epochs = len(STFT)
                 X = create_sequences(data=STFT, window_size=WINDOW_SIZE, step=STEP)
                 sequences_tensor = torch.tensor(X, dtype=torch.float32).to(DEVICE)
                 sequences_batch = DataLoader(sequences_tensor, batch_size=BATCH_SIZE, shuffle=False)
@@ -550,7 +569,20 @@ class RESTInferenceApp:
                         first_epoch_probs = probs[:, :STEP, :].cpu().numpy()
                         all_preds.append(first_epoch_probs)
 
-                probs_flat = np.concatenate(all_preds, axis=0).reshape(-1, N_CLASSES)
+                probs_flat = np.concatenate(all_preds, axis=0).reshape(-1, N_CLASSES) if all_preds else np.empty((0, N_CLASSES), dtype=np.float32)
+
+                # Score tail epochs dropped by create_sequences (up to STEP-1 epochs at end of recording)
+                n_scored = probs_flat.shape[0]
+                if n_scored < n_epochs:
+                    tail_len = n_epochs - n_scored
+                    tail_window = STFT[max(0, n_epochs - WINDOW_SIZE):n_epochs]
+                    if len(tail_window) < WINDOW_SIZE:
+                        pad = np.zeros((WINDOW_SIZE - len(tail_window), STFT.shape[1]), dtype=np.float32)
+                        tail_window = np.concatenate([pad, tail_window], axis=0)
+                    tail_tensor = torch.tensor(tail_window[np.newaxis], dtype=torch.float32).to(DEVICE)
+                    with torch.no_grad():
+                        tail_probs = F.softmax(self.model(tail_tensor), dim=2)[0, -tail_len:, :].cpu().numpy()
+                    probs_flat = np.concatenate([probs_flat, tail_probs], axis=0)
                 if use_hmm:
                     score = viterbi_smooth(probs_flat) + 1
                 else:

@@ -120,6 +120,8 @@ def process_edf(fp_edf, model, window_size, step, batch_size, device, HMM_smooth
             try:
                 with torch.no_grad():
                     raw = mne.io.read_raw_edf(fp_edf, preload=True, verbose=False)
+                    if raw.info['sfreq'] != fs:
+                        raw.resample(fs)
                 break # Successfully loaded
             except Exception as e:
                 if attempt < 2:
@@ -156,6 +158,7 @@ def process_edf(fp_edf, model, window_size, step, batch_size, device, HMM_smooth
             EEG_STFT, EMG_STFT = data_process_tensor(EEG, EMG, fs=512, device=device)
             STFT = np.concatenate((EEG_STFT, EMG_STFT), axis=-1)
             
+            n_epochs = len(STFT)
             X = create_sequences(data=STFT, window_size=window_size, step=step)
             sequences_tensor = torch.tensor(X, dtype=torch.float32).to(device)
             sequences_batch = DataLoader(sequences_tensor, batch_size=batch_size, shuffle=False)
@@ -168,7 +171,22 @@ def process_edf(fp_edf, model, window_size, step, batch_size, device, HMM_smooth
                 first_epoch_probs = probs[:, :step, :].cpu().numpy()
                 all_preds.append(first_epoch_probs)
 
-            probs_flat = np.concatenate(all_preds, axis=0).reshape(-1, n_classes)
+            probs_flat = np.concatenate(all_preds, axis=0).reshape(-1, n_classes) if all_preds else np.empty((0, n_classes), dtype=np.float32)
+
+            # Score any tail epochs not covered by the regular windows.
+            # create_sequences drops epochs that don't start a new full window,
+            # so recordings whose length isn't a multiple of step lose up to (step-1) tail epochs.
+            n_scored = probs_flat.shape[0]
+            if n_scored < n_epochs:
+                tail_len = n_epochs - n_scored
+                tail_window = STFT[max(0, n_epochs - window_size):n_epochs]
+                if len(tail_window) < window_size:
+                    pad = np.zeros((window_size - len(tail_window), STFT.shape[1]), dtype=np.float32)
+                    tail_window = np.concatenate([pad, tail_window], axis=0)
+                tail_tensor = torch.tensor(tail_window[np.newaxis], dtype=torch.float32).to(device)
+                with torch.no_grad():
+                    tail_probs = F.softmax(model(tail_tensor), dim=2)[0, -tail_len:, :].cpu().numpy()
+                probs_flat = np.concatenate([probs_flat, tail_probs], axis=0)
             if HMM_smoothing:
                 score = viterbi_smooth(probs_flat) + 1
             else:
