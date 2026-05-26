@@ -10,7 +10,7 @@ Artifact detection uses a **two-layer approach**: the REST transformer flags art
 
 A pre-built Windows executable is available on the [GitHub Releases](../../releases/latest) page.
 
-1. Go to **Releases** and download **REST_Inference_GUI.exe** under **V1.5**.
+1. Go to **Releases** and download **REST_Inference_GUI.exe**.
 2. Double-click the downloaded file to launch the GUI.
 
 No installation needed. Skip to [GUI — Quick Start](#gui--quick-start) below.
