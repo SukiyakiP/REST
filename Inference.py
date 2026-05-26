@@ -68,22 +68,36 @@ model.eval()  # Set the model to evaluation mode
 # %%
 # length=fs*60*60*24
 # edf_folder = r"M:\Alex\Python\GrandClassifier\Seizure EDF
-# edf_folder = (r"M:\EEG files\2024\DOD Cohort 2\sham",r"M:\EEG files\2024\DOD Cohort 2\TBI",
-#     r"M:\EEG files\2024\DOD Cohort 3\sham",r"M:\EEG files\2024\DOD Cohort 3\TBI",r"M:\EEG files\2024\DOD Cohort 4\sham",r"M:\EEG files\2024\DOD Cohort 4\TBI",
-#     r"M:\EEG files\2024\DOD Cohort 5\sham",r"M:\EEG files\2024\DOD Cohort 5\TBI",r"M:\EEG files\2024\DOD Cohort 6\sham",r"M:\EEG files\2024\DOD Cohort 6\TBI",
-#     r"M:\EEG files\2024\DOD Cohort 7\sham",r"M:\EEG files\2024\DOD Cohort 7\TBI",r"M:\EEG files\2024\DOD Cohort 8\sham",r"M:\EEG files\2024\DOD Cohort 8\TBI",
-#     r"M:\EEG files\2025\DOD Cohort 9\TBI",r"M:\EEG files\2025\DOD Cohort 10\TBI",r"M:\EEG files\2025\DOD Cohort 11\headcap",r"M:\EEG files\2025\DOD Cohort 11\TBI",
-#     r"M:\EEG files\2025\DOD Cohort 12\headcap",r"M:\EEG files\2025\DOD Cohort 13\headcap",r"M:\EEG files\2025\DOD Cohort 13\TBI",r"M:\EEG files\2025\DOD Cohort 14\headcap",
-#     r"M:\EEG files\2025\DOD Cohort 14\TBI",r"M:\EEG files\2026\DOD Cohort 15\headcap",r"M:\EEG files\2026\DOD Cohort 15\TBI")
+edf_folder = (r"M:\EEG files\2024\DOD Cohort 2\sham",r"M:\EEG files\2024\DOD Cohort 2\TBI",
+    r"M:\EEG files\2024\DOD Cohort 3\sham",r"M:\EEG files\2024\DOD Cohort 3\TBI",r"M:\EEG files\2024\DOD Cohort 4\sham",r"M:\EEG files\2024\DOD Cohort 4\TBI",
+    r"M:\EEG files\2024\DOD Cohort 5\sham",r"M:\EEG files\2024\DOD Cohort 5\TBI",r"M:\EEG files\2024\DOD Cohort 6\sham",r"M:\EEG files\2024\DOD Cohort 6\TBI",
+    r"M:\EEG files\2024\DOD Cohort 7\sham",r"M:\EEG files\2024\DOD Cohort 7\TBI",r"M:\EEG files\2024\DOD Cohort 8\sham",r"M:\EEG files\2024\DOD Cohort 8\TBI",
+    r"M:\EEG files\2025\DOD Cohort 9\TBI",r"M:\EEG files\2025\DOD Cohort 10\TBI",r"M:\EEG files\2025\DOD Cohort 11\headcap",r"M:\EEG files\2025\DOD Cohort 11\TBI",
+    r"M:\EEG files\2025\DOD Cohort 12\headcap",r"M:\EEG files\2025\DOD Cohort 13\headcap",r"M:\EEG files\2025\DOD Cohort 13\TBI",r"M:\EEG files\2025\DOD Cohort 14\headcap",
+    r"M:\EEG files\2025\DOD Cohort 14\TBI",r"M:\EEG files\2026\DOD Cohort 15\headcap",r"M:\EEG files\2026\DOD Cohort 15\TBI",
+    r"M:\EEG files\2026\DOD Cohort 16\headcap",r"M:\EEG files\2026\DOD Cohort 16\TBI")
 # edf_folder = [r"M:\Alex\REST-Testing"]
-edf_folder = [r"M:\EEG files\2026\DBA\Reduced"]
+# edf_folder = [r"M:\EEG files\2026\DBA\Reduced"]
 # edf_folder = (r"M:\EEG files\2026\DOD Cohort 16\headcap",r"M:\EEG files\2026\DOD Cohort 16\TBI")
 edf_files = []  # Initialize edf_files as an empty list
 for folder in edf_folder:
     a = glob.glob(os.path.join(folder, "**", "*.edf"), recursive=True)
     edf_files.extend(a)  # Append the found files to edf_files
-score_file_header = "_REST_V1.5.mat"
+score_file_header = "_REST_V2.0.mat"
 # score_file_header = "_Full_Labels.mat"
+
+# Only rescore EDFs that already have a V1.5 mat (passed manual QC review)
+RESCORE_EXISTING = True
+EXISTING_SCORE_HEADER = "_REST_V1.5.mat"
+if RESCORE_EXISTING:
+    edf_files = [
+        fp for fp in edf_files
+        if os.path.exists(os.path.join(
+            os.path.dirname(fp),
+            os.path.splitext(os.path.basename(fp))[0] + EXISTING_SCORE_HEADER
+        ))
+    ]
+    print(f"[Filter] {len(edf_files)} EDF(s) have an existing {EXISTING_SCORE_HEADER} — rescoring these only.")
 
 # %%
 

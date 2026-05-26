@@ -39,7 +39,7 @@ if os.path.exists(local_model):
     DEFAULT_MODEL_PATH = local_model
 else:
     # Fallback to the hardcoded path
-    DEFAULT_MODEL_PATH = r"M:\Alex\Python\REST V1.5\model_artifact.pth"
+    DEFAULT_MODEL_PATH = r"M:\Alex\Python\REST\model_artifact.pth"
 
 
 FS = 512
@@ -300,8 +300,6 @@ class RESTInferenceApp:
         try:
             self.root.after(0, lambda: self.progress_var.set(10))
             raw = mne.io.read_raw_edf(filepath, preload=True)
-            if raw.info['sfreq'] != FS:
-                raw.resample(FS)
 
             eeg1_data = raw.get_data(picks=[ch_eeg1])[0]
             emg_data = raw.get_data(picks=[ch_emg])[0]
@@ -413,7 +411,7 @@ class RESTInferenceApp:
         if self.current_score is None: return
         filepath = self.single_file_entry.get()
         folder = os.path.dirname(filepath)
-        default_name = os.path.splitext(os.path.basename(filepath))[0] + "_REST_V1.5.mat"
+        default_name = os.path.splitext(os.path.basename(filepath))[0] + "_REST_V2.0.mat"
 
         save_path = filedialog.asksaveasfilename(
             initialdir=folder,
@@ -528,8 +526,6 @@ class RESTInferenceApp:
                 self.root.after(0, lambda f=os.path.basename(fp_edf): self.status_var.set(f"Batch Scoring: {f}"))
 
                 raw = mne.io.read_raw_edf(fp_edf, preload=True, verbose=False)
-                if raw.info['sfreq'] != FS:
-                    raw.resample(FS)
                 ch_names = raw.info['ch_names']
 
                 eeg1_candidates = [name for name in ch_names if k_eeg1 in name and 'LP' not in name]
@@ -596,10 +592,10 @@ class RESTInferenceApp:
                 # Save
                 file_name = os.path.splitext(os.path.basename(fp_edf))[0]
                 save_folder = os.path.dirname(fp_edf)
-                save_path = os.path.join(save_folder, file_name + "_REST_V1.5.mat")
+                save_path = os.path.join(save_folder, file_name + "_REST_V2.0.mat")
 
                 savemat(save_path, {'score': score, 'power': power})
-                self.root.after(0, self._log_batch, f"  -> Success: Saved to {file_name}_REST_V1.5.mat")
+                self.root.after(0, self._log_batch, f"  -> Success: Saved to {file_name}_REST_V2.0.mat")
 
             except Exception as e:
                 self.root.after(0, self._log_batch, f"  -> Error processing {os.path.basename(fp_edf)}: {str(e)}")

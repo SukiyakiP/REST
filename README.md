@@ -10,10 +10,11 @@ Artifact detection uses a **two-layer approach**: the REST transformer flags art
 
 A pre-built Windows executable is available on the [GitHub Releases](../../releases/latest) page.
 
-1. Go to **Releases** and download **REST_Inference_GUI.exe** under **V1.5**.
-2. Double-click the downloaded file to launch the GUI.
+1. Go to **Releases** and download **REST_Inference_GUI_CPU.zip**.
+2. Extract the zip and open the `REST_Inference_GUI_CPU` folder.
+3. Double-click **REST_Inference_GUI_CPU.exe** to launch the GUI.
 
-No installation needed. Skip to [GUI — Quick Start](#gui--quick-start) below.
+The executable is CPU-only and runs on any Windows machine without a GPU or Python installation. Skip to [GUI — Quick Start](#gui--quick-start) below.
 
 ---
 
@@ -34,12 +35,12 @@ Required if you want to retrain the model or run the inference scripts.
 
 The GUI is the easiest way to score recordings. No coding required.
 
-**Launch (EXE):** Double-click `dist/SeizureDetector/SeizureDetector.exe`.
+**Launch (EXE):** Open the extracted `REST_Inference_GUI_CPU` folder and double-click `REST_Inference_GUI_CPU.exe`.
 
 **Launch (Python):**
 ```bash
 conda activate REST
-python Inference_GUI.py
+python Inference_GUI_CPU.py
 ```
 
 Wait for **Model Status: Loaded ✅** before doing anything else.
@@ -67,7 +68,7 @@ Scores an entire folder of EDF files automatically.
    | EEG 1 Keyword | `RF` | Your EEG channel isn't named with `RF` |
    | EMG Keyword | `EMG` | Your EMG channel has a different name |
 3. Click **Scan & Score**. Progress is shown in the log box.
-4. One `_REST_V1.5.mat` file is saved next to each scored EDF.
+4. One `_REST_V2.0.mat` file is saved next to each scored EDF.
 
 ---
 
@@ -82,7 +83,7 @@ Each `.mat` file contains two variables:
 
 Load in MATLAB:
 ```matlab
-data  = load('MyRecording_REST_V1.5.mat');
+data  = load('MyRecording_REST_V2.0.mat');
 score = data.score;   % [N × 1]
 power = data.power;   % [N × 8]
 ```
@@ -90,7 +91,7 @@ power = data.power;   % [N × 8]
 Load in Python:
 ```python
 from scipy.io import loadmat
-data  = loadmat('MyRecording_REST_V1.5.mat')
+data  = loadmat('MyRecording_REST_V2.0.mat')
 score = data['score'].flatten()
 power = data['power']
 ```
@@ -132,7 +133,7 @@ The rule-based layer adds the most value for CD1 recordings, where artifact PTP 
 ### Toggling
 
 - **`Inference.py`:** `ARTIFACT_FILTER = True / False`
-- **`Inference_GUI.py`:** "Artifact Filter" checkbox in both Single File and Batch mode
+- **`Inference_GUI_CPU.py`:** "Artifact Filter" checkbox in both Single File and Batch mode
 
 Parameters are stored in `artifact_params.json`. See `filter_function_note.md` for a full explanation of the algorithm and tuning procedure.
 
@@ -148,7 +149,7 @@ Converts raw EDF + manual score file pairs into the format expected by the train
 
 **Edit these paths at the top of the script:**
 ```python
-OUTPUT_DIR    = r"D:\Training data V1.5_tensor"   # where to save compiled data
+OUTPUT_DIR    = r"D:\Training data V2.0_tensor"   # where to save compiled data
 
 FP_EDF_ORIG   = [r"...\Animal1.edf", ...]         # EDF files
 FP_SCORE_ORIG = [r"...\Animal1_RM.txt", ...]      # matching score files (same order)
@@ -170,8 +171,8 @@ Results are saved to `OUTPUT_DIR`. Already-compiled recordings are skipped autom
 
 **Edit these paths:**
 ```python
-DATA_DIR   = r"D:\Training data V1.5_tensor"   # output from Step 1
-Model_path = r"...\my_new_model.pth"           # where to save trained weights
+DATA_DIR        = r"D:\Training data V2.0_tensor"   # output from Step 1
+CHECKPOINT_BASE = r"...\checkpoints"                 # root folder for checkpoint runs
 ```
 
 **Run:**
@@ -179,9 +180,13 @@ Model_path = r"...\my_new_model.pth"           # where to save trained weights
 python Training.py
 ```
 
-The best model (by validation accuracy) is saved automatically. Training stops early if accuracy stops improving.
+Each run creates a timestamped subfolder under `CHECKPOINT_BASE` containing:
+- `best_acc.pth` — weights with best overall validation accuracy
+- `best_artf1.pth` — weights with best artifact F1
+- `latest.pth` — most recent epoch (for resuming)
+- `config.json` — model hyperparameters saved automatically
 
-> ⚠️ **Important:** The `Use_BatchNorm` flag must be the same in `Training.py` **and** `Inference.py`. Mismatching will produce garbage predictions.
+> ⚠️ **Important:** The `Use_LayerNorm` flag must be the same in `Training.py` **and** `Inference.py`. Mismatching will produce garbage predictions.
 
 ---
 
@@ -191,12 +196,20 @@ Scores a large set of EDF files from the command line.
 
 **Edit these settings:**
 ```python
-Model_path        = r"...\model_BatchNorm_1.pth"
+CHECKPOINT_DIR    = r"...\checkpoints\20260514_1309_w120_artrepeat2"
+WEIGHT_FILE       = "best_acc.pth"   # or "best_artf1.pth"
+
 edf_folder        = [r"M:\EEG files\2026\Cohort15\sham",
                      r"M:\EEG files\2026\Cohort15\TBI"]
+score_file_header = "_REST_V2.0.mat"
+
 Skip_processed    = False   # set True to skip files already scored
 HMM_smoothing     = True    # recommended
 ARTIFACT_FILTER   = True    # rule-based EEG override pass (Layer 2); recommended
+
+# To rescore only EDFs that passed a prior manual QC review:
+RESCORE_EXISTING      = False                   # set True to enable
+EXISTING_SCORE_HEADER = "_REST_V1.5.mat"        # only process EDFs that have this file
 ```
 
 **Run:**
@@ -204,7 +217,7 @@ ARTIFACT_FILTER   = True    # rule-based EEG override pass (Layer 2); recommende
 python Inference.py
 ```
 
-One `_REST_V1.5.mat` file is saved next to each EDF. Errors (e.g., missing channels, server disconnects) are logged and skipped without stopping the run.
+One `_REST_V2.0.mat` file is saved next to each EDF. Errors (e.g., missing channels, server disconnects) are logged and skipped without stopping the run.
 
 ---
 
@@ -214,7 +227,8 @@ Compares model predictions against manual reference score files and generates an
 
 **Edit these settings:**
 ```python
-MODEL_PATH = r"...\model_BatchNorm_1.pth"
+CHECKPOINT_DIR = r"...\checkpoints\20260514_1309_w120_artrepeat2"
+WEIGHT_FILE    = "best_acc.pth"
 
 edf_folder_config = [
     ("GroupA", r"M:\REST-Testing\GroupA"),   # folder must contain paired .edf + .txt files
@@ -227,7 +241,7 @@ edf_folder_config = [
 python Test_EDF.py
 ```
 
-Results (accuracy, Cohen's Kappa, confusion matrix) are printed to the console and saved as an Excel workbook next to the model file.
+Results (accuracy, Cohen's Kappa, confusion matrix) are printed to the console and saved as an Excel workbook next to the checkpoint folder.
 
 ---
 
@@ -235,8 +249,9 @@ Results (accuracy, Cohen's Kappa, confusion matrix) are printed to the console a
 
 | Problem | Fix |
 |---|---|
-| Model Status: Failed ❌ | Check the model path. Make sure the `.pth` file exists. |
+| Model Status: Failed ❌ | Check the model path. Make sure the `.pth` file and its `config.json` exist in the same checkpoint folder. |
 | "Skipping: Missing 'RF' channel" | Change the EEG keyword in Batch Mode, or edit `Inference.py` to match your channel names. |
 | GPU out of memory | Reduce `batch_size` in the script (try 64 or 32). |
-| Hypnogram looks wrong | Make sure `Use_BatchNorm` matches between training and inference. Also verify correct channel selection. |
-| Slow on CPU | A CUDA-capable GPU is strongly recommended. CPU inference works but is slow (~10 min/recording). |
+| Hypnogram looks wrong | Make sure `Use_LayerNorm` matches between training and inference. Also verify correct channel selection. |
+| Output longer than the EDF | The EDF sample rate doesn't match the expected 512 Hz. REST resamples automatically — ensure your EDF loads without error. |
+| No GPU available | Use the CPU executable or set `DEVICE = torch.device('cpu')` in the script. CPU inference is slower but produces identical results. |
