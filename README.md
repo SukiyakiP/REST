@@ -10,9 +10,14 @@ Artifact detection uses a **two-layer approach**: the REST transformer flags art
 
 A pre-built Windows executable is available on the [GitHub Releases](../../releases/latest) page.
 
+<<<<<<< HEAD
 1. Go to **Releases** and download **REST_Inference_GUI_CPU.zip**.
 2. Extract the zip and open the `REST_Inference_GUI_CPU` folder.
 3. Double-click **REST_Inference_GUI_CPU.exe** to launch the GUI.
+=======
+1. Go to **Releases** and download **REST_Inference_GUI.exe**.
+2. Double-click the downloaded file to launch the GUI.
+>>>>>>> 75061f6795b58232e476363eecebe24aabae6a4d
 
 The executable is CPU-only and runs on any Windows machine without a GPU or Python installation. Skip to [GUI — Quick Start](#gui--quick-start) below.
 
